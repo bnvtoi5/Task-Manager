@@ -16,7 +16,8 @@ import {
   Briefcase,
   Check,
   X,
-  Trash2
+  Trash2,
+  Cloud
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { ConfirmModal } from '../common/ConfirmModal';
@@ -54,6 +55,8 @@ export const TopBar: React.FC<TopBarProps> = ({
     unreadNotificationCount,
     isSidebarOpen,
     setIsSidebarOpen,
+    firebaseStatus,
+    firebaseError,
   } = useApp();
 
   const [isWsDropdownOpen, setIsWsDropdownOpen] = useState(false);
@@ -355,6 +358,42 @@ export const TopBar: React.FC<TopBarProps> = ({
               <span>Mời bạn</span>
             </button>
           )}
+
+          {/* Firebase Cloud Sync Status */}
+          <div
+            className={`hidden md:inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold rounded-full border transition cursor-default ${
+              firebaseStatus === 'connected'
+                ? 'border-emerald-200 dark:border-emerald-800/80 bg-emerald-50/80 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                : firebaseStatus === 'connecting'
+                ? 'border-amber-200 dark:border-amber-800/80 bg-amber-50/80 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300'
+                : 'border-rose-200 dark:border-rose-800/80 bg-rose-50/80 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300'
+            }`}
+            title={
+              firebaseStatus === 'connected'
+                ? 'Đã kết nối Firebase Firestore: my-workplace-app (Đồng bộ thời gian thực)'
+                : firebaseStatus === 'connecting'
+                ? 'Đang kết nối tới Firestore...'
+                : `Lỗi kết nối Firebase: ${firebaseError || 'Kiểm tra cài đặt Firestore'}`
+            }
+          >
+            <Cloud className={`w-3.5 h-3.5 ${firebaseStatus === 'connected' ? 'text-emerald-500' : firebaseStatus === 'connecting' ? 'text-amber-500' : 'text-rose-500'}`} />
+            <span>
+              {firebaseStatus === 'connected'
+                ? 'Cloud DB'
+                : firebaseStatus === 'connecting'
+                ? 'Đang kết nối'
+                : 'Offline DB'}
+            </span>
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                firebaseStatus === 'connected'
+                  ? 'bg-emerald-500 animate-pulse'
+                  : firebaseStatus === 'connecting'
+                  ? 'bg-amber-500 animate-ping'
+                  : 'bg-rose-500'
+              }`}
+            />
+          </div>
 
           {/* Chat Drawer Trigger */}
           <button

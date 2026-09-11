@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useRef, ReactNode } from 'react';
 import {
   UserProfile,
   UserRole,
@@ -21,6 +21,7 @@ import {
 } from '../types';
 import { loadDatabase, saveDatabase, DatabaseState, resetToEmptyDatabase } from '../services/storage';
 import { playAlarmSound, sendBrowserNotification } from '../services/alarm';
+import { subscribeToFirestore, saveToFirestore } from '../services/firebase';
 
 export type AppRoute =
   | '/login'
@@ -38,6 +39,10 @@ interface AppContextType {
   theme: 'light' | 'dark';
   toggleTheme: () => void;
   navigateTo: (route: AppRoute) => void;
+
+  // Firebase Cloud Sync
+  firebaseStatus: 'connecting' | 'connected' | 'error';
+  firebaseError: string | null;
 
   // Active Context Hierarchy
   activeWorkspace: Workspace | null;
@@ -155,6 +160,35 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [db, setDb] = useState<DatabaseState>(() => loadDatabase());
+  const [firebaseStatus, setFirebaseStatus] = useState<'connecting' | 'connected' | 'error'>('connecting');
+  const [firebaseError, setFirebaseError] = useState<string | null>(null);
+  const isIncomingRemoteUpdate = useRef(false);
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Real-time synchronization with Firebase Firestore
+  useEffect(() => {
+    const unsubscribe = subscribeToFirestore(
+      (remoteDb) => {
+        isIncomingRemoteUpdate.current = true;
+        setDb(remoteDb);
+        // Also update local cache
+        saveDatabase(remoteDb);
+        setTimeout(() => {
+          isIncomingRemoteUpdate.current = false;
+        }, 150);
+      },
+      (status, errorMsg) => {
+        setFirebaseStatus(status);
+        if (errorMsg) {
+          setFirebaseError(errorMsg);
+        } else {
+          setFirebaseError(null);
+        }
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
     // Check if there was a saved session
     const savedUserId = localStorage.getItem('wtm_session_user');
@@ -271,9 +305,31 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setActiveAlarmTask(null);
   };
 
-  // Sync to localStorage
+  // Sync to localStorage and Firestore
   useEffect(() => {
+    // Always persist to local cache immediately
     saveDatabase(db);
+
+    // If change was incoming from remote Firestore snapshot, don't echo back
+    if (isIncomingRemoteUpdate.current) {
+      return;
+    }
+
+    // Debounce write to Firestore to optimize quota and avoid rate limits
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    saveTimeoutRef.current = setTimeout(() => {
+      saveToFirestore(db).catch((err) => {
+        console.warn('Không thể đồng bộ lên Firestore:', err);
+      });
+    }, 600);
+
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
   }, [db]);
 
   useEffect(() => {
@@ -1143,6 +1199,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         theme,
         toggleTheme,
         navigateTo,
+
+        firebaseStatus,
+        firebaseError,
 
         activeWorkspace,
         activePeriod,
