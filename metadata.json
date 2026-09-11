@@ -1,0 +1,6 @@
+{
+  "name": "Workspace Task Manager",
+  "description": "Hệ thống quản lý công việc và phòng làm việc hiện đại theo mô hình Account -> Workspace -> Period -> Division -> Cluster -> Task, hỗ trợ phân quyền Admin/User, Smart Area, Chat nội bộ và giao diện responsive.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

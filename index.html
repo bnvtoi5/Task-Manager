@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Workspace Task Manager</title>
+    <meta name="description" content="Hệ thống quản lý công việc và phòng làm việc phân cấp: Account -> Workspace -> Period -> Division -> Cluster -> Task." />
+    <meta property="og:title" content="Workspace Task Manager" />
+    <meta property="og:description" content="Hệ thống quản lý công việc và phòng làm việc phân cấp: Account -> Workspace -> Period -> Division -> Cluster -> Task." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <!-- Fonts: Plus Jakarta Sans & Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <!-- Instant Theme Loader strictly following user's manual toggle -->
+    <script>
+      (function() {
+        var t = localStorage.getItem('wtm_theme');
+        if (t === 'dark') {
+          document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+        }
+      })();
+    </script>
+  </head>
+  <body class="bg-slate-50 dark:bg-[#090d16] text-slate-900 dark:text-slate-100 antialiased selection:bg-indigo-500 selection:text-white">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
