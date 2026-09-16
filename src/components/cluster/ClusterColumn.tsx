@@ -3,6 +3,7 @@ import {
   MoreVertical,
   Plus,
   ChevronDown,
+  ChevronUp,
   ChevronRight,
   CheckSquare,
   Trash2,
@@ -156,25 +157,41 @@ export const ClusterColumn: React.FC<ClusterColumnProps> = ({
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         style={style}
-        className={`${className || 'w-80 shrink-0 max-h-full'} flex flex-col rounded-2xl transition-all duration-150 border ${
+        className={`${
+          className || (cluster.is_collapsed ? 'w-80 shrink-0 self-start' : 'w-80 shrink-0 max-h-full')
+        } flex flex-col rounded-2xl transition-all duration-150 border ${
           isDragOver
             ? 'bg-indigo-50/70 dark:bg-indigo-950/20 border-indigo-400 dark:border-indigo-600 ring-2 ring-indigo-500/20'
-            : 'bg-slate-100/90 dark:bg-[#0e1626]/90 border-slate-200/90 dark:border-slate-800'
+            : 'bg-slate-100/90 dark:bg-[#0e1626]/90 border-slate-200/90 dark:border-slate-800 shadow-xs'
         }`}
       >
         {/* Cluster Header */}
-        <div className="flex items-center justify-between p-3.5 border-b border-slate-200/80 dark:border-slate-800/80 bg-white/40 dark:bg-[#121b2d]/40 rounded-t-2xl">
+        <div
+          onClick={() => {
+            if (cluster.is_collapsed) {
+              toggleClusterCollapse(cluster.id);
+            }
+          }}
+          className={`flex items-center justify-between p-3.5 ${
+            cluster.is_collapsed
+              ? 'rounded-2xl cursor-pointer hover:bg-white/60 dark:hover:bg-[#121b2d]/60'
+              : 'border-b border-slate-200/80 dark:border-slate-800/80 rounded-t-2xl'
+          } bg-white/40 dark:bg-[#121b2d]/40 transition-colors`}
+        >
           <div className="flex items-center gap-2 min-w-0">
             <button
               type="button"
-              onClick={() => toggleClusterCollapse(cluster.id)}
-              className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleClusterCollapse(cluster.id);
+              }}
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition"
               title={cluster.is_collapsed ? 'Mở rộng cụm' : 'Thu gọn cụm'}
             >
               {cluster.is_collapsed ? (
-                <ChevronRight className="w-4 h-4" />
-              ) : (
                 <ChevronDown className="w-4 h-4" />
+              ) : (
+                <ChevronUp className="w-4 h-4" />
               )}
             </button>
 

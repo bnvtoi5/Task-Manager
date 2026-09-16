@@ -51,63 +51,232 @@
   white-space: nowrap;
 }
 
-/* Warm / Book Paper Theme - Gentle, soothing natural paper aesthetic */
+/* =========================================================================
+   WARM / BOOK PAPER THEME (CHUẨN GIẤY ẤM KINDLE & APPLE BOOKS SEPIA)
+   - Đồng điệu tuyệt đối: Toàn bộ vùng sáng (Sidebar, Header, Cards, Canvas)
+     được chuyển sang gam màu giấy ấm dịu mắt, hòa quyện với các cụm và chi tiết sẫm màu.
+   - Nền Workspace & Canvas: Giấy kraft ấm áp dịu mắt (#ebdcc8)
+   - Sidebar: Giấy bìa ấm mộc (#dfd1bb), hòa nhập với các cột cụm
+   - Top Header: Thanh điều hướng giấy ngà ấm (#dfd1bb), viền mỏng (#cbba9f)
+   - Khối Cột / Cụm: Khối vellum ấm áp (#e5daca / #dfd1bb), viền (#cbba9f)
+   - Tiêu đề cụm & Chân trang: Khối ấm đậm nhẹ (#d8c8b0)
+   - Thẻ Task (Card): Giấy ngà tự nhiên ấm áp (#eedfcc), không bao giờ trắng sáng
+   - Khi hover thẻ: Tông ấm tinh tế (#e4d3bd), đổ bóng chì mềm
+   - Ô nhập liệu (Input, Search, Select): Giấy ngà ấm (#eedfcc), mực nâu sẫm
+   - Mực in (Typography): Nâu cà phê espresso đậm đà (#2a1d12) dễ đọc, êm dịu
+   - Nút hành động & Điểm nhấn: Màu da bò cognac / đất nung cổ điển (#8c451e)
+   ========================================================================= */
 html.theme-warm-book {
   color-scheme: light;
 }
+html.theme-warm-book,
 html.theme-warm-book body {
-  background-color: #f7f4eb !important;
-  color: #2e332d !important;
+  background-color: #ebdcc8 !important;
+  color: #2a1d12 !important;
 }
-html.theme-warm-book .bg-white,
+
+/* 1. SIDEBAR (THANH ĐIỀU HƯỚNG TRÁI - GIẤY BÌA ẤM MỘC) */
+html.theme-warm-book aside,
+html.theme-warm-book aside.bg-slate-50\/95,
+html.theme-warm-book aside > div {
+  background-color: #dfd1bb !important;
+  border-color: #cbba9f !important;
+  color: #2a1d12 !important;
+}
+html.theme-warm-book aside button,
+html.theme-warm-book aside a {
+  color: #4a3827 !important;
+}
+html.theme-warm-book aside button:hover,
+html.theme-warm-book aside a:hover {
+  background-color: #d5c4aa !important;
+  color: #1f140a !important;
+}
+html.theme-warm-book aside .bg-indigo-50,
+html.theme-warm-book aside .bg-indigo-50\/50,
+html.theme-warm-book aside .bg-slate-200\/60,
+html.theme-warm-book aside .font-bold.text-indigo-600,
+html.theme-warm-book aside .font-semibold.text-indigo-600 {
+  background-color: #8c451e !important;
+  color: #fdfaf4 !important;
+}
+html.theme-warm-book aside .text-slate-500,
+html.theme-warm-book aside .text-slate-400 {
+  color: #75614a !important;
+}
+
+/* 2. TOP HEADER & SUB-HEADER (THANH ĐIỀU HƯỚNG & THANH PHÂN CẤP) */
+html.theme-warm-book header,
+html.theme-warm-book header.bg-white\/95,
+html.theme-warm-book header > div {
+  background-color: #dfd1bb !important;
+  border-color: #cbba9f !important;
+  box-shadow: 0 1px 3px rgba(45, 30, 15, 0.05) !important;
+  color: #2a1d12 !important;
+}
+html.theme-warm-book header .text-slate-900,
+html.theme-warm-book header .text-slate-800 {
+  color: #2a1d12 !important;
+}
+html.theme-warm-book header .text-slate-500,
+html.theme-warm-book header .text-slate-600 {
+  color: #5d4833 !important;
+}
+
+/* 3. WORKSPACE CANVAS & SUB-SURFACES (NỀN LÀM VIỆC CHÍNH) */
 html.theme-warm-book .bg-slate-50,
-html.theme-warm-book .bg-neutral-50,
-html.theme-warm-book .bg-slate-100\/60,
-html.theme-warm-book .bg-slate-100\/90 {
-  background-color: #fffdf9 !important;
+html.theme-warm-book .bg-slate-50\/95,
+html.theme-warm-book .bg-slate-50\/80,
+html.theme-warm-book .bg-slate-50\/70,
+html.theme-warm-book .bg-slate-50\/50,
+html.theme-warm-book .bg-neutral-50 {
+  background-color: #ebdcc8 !important;
 }
+
+/* 4. CLUSTER COLUMNS (CÁC CỘT / CỤM CÔNG VIỆC) */
 html.theme-warm-book .bg-slate-100,
+html.theme-warm-book .bg-slate-100\/90,
+html.theme-warm-book .bg-slate-100\/80,
+html.theme-warm-book .bg-slate-100\/60,
+html.theme-warm-book .bg-slate-200\/60,
 html.theme-warm-book .bg-slate-200\/70,
-html.theme-warm-book .bg-slate-200\/80 {
-  background-color: #f0ebe0 !important;
+html.theme-warm-book .bg-slate-200\/80,
+html.theme-warm-book .bg-slate-200 {
+  background-color: #dfd1bb !important;
+  border-color: #cbba9f !important;
 }
+
+/* Tiêu đề cụm & Thanh chân trang */
+html.theme-warm-book .bg-white\/40,
+html.theme-warm-book .bg-white\/50,
+html.theme-warm-book .bg-white\/60,
+html.theme-warm-book .bg-white\/70 {
+  background-color: #d8c8b0 !important;
+}
+
+/* 5. TASK CARDS & NỀN THẺ (GIẤY NGÀ TỰ NHIÊN ẤM ÁP - KHÔNG BAO GIỜ TRẮNG SÁNG) */
+html.theme-warm-book [data-task-card="true"],
+html.theme-warm-book .bg-white,
+html.theme-warm-book .bg-white\/95,
+html.theme-warm-book .bg-white\/90,
+html.theme-warm-book .bg-white\/80 {
+  background-color: #eedfcc !important;
+  border-color: #cbb69e !important;
+}
+
+/* Khi rê chuột vào thẻ: giữ nguyên giấy ấm, nâng nhẹ bóng mộc */
+html.theme-warm-book [data-task-card="true"]:hover {
+  background-color: #e4d3bd !important;
+  border-color: #bfa886 !important;
+  box-shadow: 0 4px 14px rgba(45, 30, 15, 0.1) !important;
+}
+
+/* Modals, Popovers & Dropdowns */
+html.theme-warm-book .shadow-xl,
+html.theme-warm-book .shadow-2xl {
+  background-color: #eedfcc !important;
+  border-color: #cbba9f !important;
+  box-shadow: 0 16px 32px -4px rgba(45, 30, 15, 0.18) !important;
+}
+
+/* 6. HOVER SURFACES */
+html.theme-warm-book .hover\:bg-slate-100:hover,
+html.theme-warm-book .hover\:bg-slate-100\/80:hover,
+html.theme-warm-book .hover\:bg-slate-200\/60:hover,
+html.theme-warm-book .hover\:bg-slate-200\/80:hover,
+html.theme-warm-book .hover\:bg-slate-50:hover,
+html.theme-warm-book .hover\:bg-slate-50\/70:hover {
+  background-color: #d5c4aa !important;
+}
+
+/* 7. BORDERS & DIVIDERS */
 html.theme-warm-book .border-slate-200,
 html.theme-warm-book .border-neutral-200,
-html.theme-warm-book .border-slate-200\/80,
 html.theme-warm-book .border-slate-200\/90,
-html.theme-warm-book .border-slate-300\/70 {
-  border-color: #e8e1d3 !important;
+html.theme-warm-book .border-slate-200\/80,
+html.theme-warm-book .border-slate-300,
+html.theme-warm-book .border-slate-300\/70,
+html.theme-warm-book .border-slate-100 {
+  border-color: #cbba9f !important;
 }
+
+/* 8. TYPOGRAPHY (MỰC IN NÂU ESPRESSO TỰ NHIÊN, DỄ ĐỌC VÀ ÊM MẮT) */
 html.theme-warm-book .text-slate-900,
+html.theme-warm-book .text-slate-800,
 html.theme-warm-book .text-neutral-900 {
-  color: #2e332d !important;
+  color: #2a1d12 !important;
 }
 html.theme-warm-book .text-slate-700,
-html.theme-warm-book .text-slate-600 {
-  color: #4b5249 !important;
+html.theme-warm-book .text-slate-600,
+html.theme-warm-book .text-neutral-700 {
+  color: #4a3827 !important;
 }
 html.theme-warm-book .text-slate-500,
-html.theme-warm-book .text-slate-400 {
-  color: #72786e !important;
+html.theme-warm-book .text-slate-400,
+html.theme-warm-book .text-neutral-500 {
+  color: #75614a !important;
 }
+
+/* 9. NÚT HÀNH ĐỘNG & ĐIỂM NHẤN (MÀU DA BÒ COGNAC / ĐẤT NUNG CỔ ĐIỂN) */
 html.theme-warm-book .bg-indigo-600,
 html.theme-warm-book .bg-blue-600 {
-  background-color: #248a5b !important;
+  background-color: #8c451e !important;
+  color: #fdfaf4 !important;
+  box-shadow: 0 1px 3px rgba(140, 69, 30, 0.22) !important;
 }
 html.theme-warm-book .hover\:bg-indigo-700:hover,
 html.theme-warm-book .hover\:bg-blue-700:hover {
-  background-color: #1e754d !important;
+  background-color: #753714 !important;
+  color: #fdfaf4 !important;
 }
 html.theme-warm-book .text-indigo-600,
+html.theme-warm-book .text-indigo-700,
 html.theme-warm-book .text-blue-600 {
-  color: #248a5b !important;
+  color: #8c451e !important;
 }
 html.theme-warm-book .bg-indigo-50,
-html.theme-warm-book .bg-indigo-50\/80 {
-  background-color: #ebf5ee !important;
+html.theme-warm-book .bg-indigo-50\/50,
+html.theme-warm-book .bg-indigo-50\/70,
+html.theme-warm-book .bg-indigo-50\/80,
+html.theme-warm-book .bg-indigo-50\/90,
+html.theme-warm-book .bg-indigo-100 {
+  background-color: #e5d3bf !important;
+  color: #72320f !important;
 }
-html.theme-warm-book .border-indigo-200 {
-  border-color: #c9e5d4 !important;
+html.theme-warm-book .border-indigo-200,
+html.theme-warm-book .border-indigo-300 {
+  border-color: #cbb69e !important;
+}
+
+/* 10. Ô NHẬP LIỆU (INPUT, SELECT, TEXTAREA - GIẤY NGÀ ẤM, KHÔNG CHÓI TRẮNG) */
+html.theme-warm-book input:not([type="checkbox"]):not([type="radio"]),
+html.theme-warm-book select,
+html.theme-warm-book textarea {
+  background-color: #eedfcc !important;
+  border-color: #cbba9f !important;
+  color: #2a1d12 !important;
+}
+html.theme-warm-book input::placeholder,
+html.theme-warm-book textarea::placeholder {
+  color: #7d6b54 !important;
+}
+html.theme-warm-book input:not([type="checkbox"]):not([type="radio"]):focus,
+html.theme-warm-book select:focus,
+html.theme-warm-book textarea:focus {
+  border-color: #8c451e !important;
+  outline-color: #8c451e !important;
+}
+
+/* 11. SCROLLBARS */
+html.theme-warm-book ::-webkit-scrollbar-track {
+  background: #ebdcc8 !important;
+}
+html.theme-warm-book ::-webkit-scrollbar-thumb {
+  background: rgba(130, 105, 75, 0.35) !important;
+  border-radius: 9999px !important;
+}
+html.theme-warm-book ::-webkit-scrollbar-thumb:hover {
+  background: rgba(130, 105, 75, 0.6) !important;
 }
 
 /* Neon Cyberpunk Theme */

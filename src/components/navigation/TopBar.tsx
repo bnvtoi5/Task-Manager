@@ -19,7 +19,9 @@ import {
   Trash2,
   Cloud,
   History,
+  RotateCcw,
   Palette,
+  BookOpen,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { AppTheme } from '../../types';
@@ -425,17 +427,17 @@ export const TopBar: React.FC<TopBarProps> = ({
             )}
           </button>
 
-          {/* Snapshots & Backup Button */}
+          {/* Rollback & Backup Button */}
           <button
             type="button"
             onClick={() => setIsSnapshotModalOpen(true)}
             className="p-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition relative"
-            title="Lịch sử & Bản sao lưu (Snapshots & Rollback)"
+            title="Trung tâm Rollback & Khôi phục (Snapshots & Rollback)"
           >
-            <History className="w-4 h-4 text-indigo-500" />
-            {(db.snapshots || []).length > 0 && (
+            <RotateCcw className="w-4 h-4 text-indigo-500" />
+            {((db.restore_points || []).length > 0 || (db.snapshots || []).length > 0) && (
               <span className="absolute -top-0.5 -right-0.5 text-[9px] font-bold px-1 rounded-full bg-indigo-100 dark:bg-indigo-900/80 text-indigo-700 dark:text-indigo-300">
-                {(db.snapshots || []).length}
+                {(db.restore_points || []).length + (db.snapshots || []).length}
               </span>
             )}
           </button>
@@ -462,9 +464,9 @@ export const TopBar: React.FC<TopBarProps> = ({
                     Giao diện hiển thị
                   </div>
                   {[
+                    { id: 'warm-book', label: 'Giấy ấm Sepia (Kindle/Book)', icon: BookOpen, color: 'bg-[#ebdcc8] text-[#8c451e] border border-[#cbba9f]' },
                     { id: 'light', label: 'Sáng thanh lịch', icon: Sun, color: 'bg-amber-100 text-amber-600' },
                     { id: 'dark', label: 'Tối chuẩn (Navy)', icon: Moon, color: 'bg-slate-800 text-indigo-400' },
-                    { id: 'warm-book', label: 'Giấy ấm dịu mắt (Book Paper)', icon: Sun, color: 'bg-[#f7f4eb] text-[#248a5b]' },
                     { id: 'neon', label: 'Neon Cyberpunk', icon: Palette, color: 'bg-cyan-950 text-cyan-400' },
                   ].map((t) => (
                     <button

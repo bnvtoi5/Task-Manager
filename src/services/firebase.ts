@@ -49,12 +49,28 @@ export function subscribeToFirestore(
     docRef,
     (snapshot: DocumentSnapshot) => {
       if (snapshot.exists()) {
-        const data = snapshot.data() as { stateJson: string };
+        const data = snapshot.data() as { stateJson: string; schema_version?: number };
+        // If remote data belongs to older schema or was before the clean wipe, overwrite with clean initial DB
+        if (!data || !data.schema_version || data.schema_version < 7) {
+          const initial = getInitialDatabase();
+          setDoc(docRef, {
+            stateJson: JSON.stringify(initial),
+            schema_version: 7,
+            updatedAt: new Date().toISOString(),
+            appId: firebaseConfig.projectId,
+          }).catch(() => {});
+          onRemoteData(initial);
+          onStatusChange?.('connected');
+          return;
+        }
+
         if (data && data.stateJson) {
           try {
             const parsed = JSON.parse(data.stateJson) as DatabaseState;
             if (!parsed.chat_groups) parsed.chat_groups = [];
             if (!parsed.snapshots) parsed.snapshots = [];
+            if (!parsed.restore_points) parsed.restore_points = [];
+            if (!parsed.board_modes) parsed.board_modes = [];
             onRemoteData(parsed);
             onStatusChange?.('connected');
           } catch (e) {
@@ -67,6 +83,7 @@ export function subscribeToFirestore(
         const initial = getInitialDatabase();
         setDoc(docRef, {
           stateJson: JSON.stringify(initial),
+          schema_version: 7,
           updatedAt: new Date().toISOString(),
           appId: firebaseConfig.projectId,
         })
@@ -92,17 +109,19 @@ export function subscribeToFirestore(
 /**
  * Saves database state to Firestore.
  */
-export async function saveToFirestore(db: DatabaseState): Promise<void> {
-  if (!firestore) return;
+export async function saveToFirestore(db: DatabaseState): Promise<boolean> {
+  if (!firestore) return false;
   try {
     const docRef = doc(firestore, FIRESTORE_COLLECTION, FIRESTORE_DOC);
     await setDoc(docRef, {
       stateJson: JSON.stringify(db),
+      schema_version: 7,
       updatedAt: new Date().toISOString(),
       updatedBy: 'web_client',
     });
+    return true;
   } catch (err: any) {
     console.warn('Lỗi đồng bộ dữ liệu lên Firestore:', err);
-    throw err;
+    return false;
   }
 }

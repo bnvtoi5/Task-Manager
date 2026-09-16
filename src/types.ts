@@ -61,7 +61,7 @@ export interface Period {
 }
 
 export type DivisionVisibility = 'public' | 'private';
-export type DivisionLayoutType = 'full' | 'single' | 'smart_area';
+export type DivisionLayoutType = 'full' | 'single';
 
 export interface BoardModeCluster {
   id: string;
@@ -69,6 +69,7 @@ export interface BoardModeCluster {
   color: string;
   icon?: string;
   sort_order: number;
+  is_collapsed?: boolean;
 }
 
 export interface BoardMode {
@@ -264,7 +265,7 @@ export interface SystemSetting {
   max_workspaces_per_user: number;
   default_user_role: UserRole;
   maintenance_mode: boolean;
-  auto_snapshot_frequency?: 'daily' | '12h' | '6h' | 'manual';
+  auto_snapshot_frequency?: 'daily' | '12h' | '6h' | 'hourly' | 'manual';
   last_auto_snapshot_at?: string;
   auto_snapshot_excluded_division_ids?: string[];
   smtp_enabled?: boolean;
@@ -304,16 +305,22 @@ export interface RestorePoint {
   workspace_id?: string | null;
   name: string;
   description?: string;
+  action_type?: string;
   created_by: string;
   created_by_name: string;
   created_at: string;
-  affected_divisions: {
+  affected_divisions?: {
     id: string;
     name: string;
     visibility: 'public' | 'private';
     clusters_count: number;
     tasks_count: number;
   }[];
+  stats?: {
+    tasks_count: number;
+    clusters_count: number;
+    divisions_count: number;
+  };
   data_state: string; // JSON stringify of DatabaseState
 }
 

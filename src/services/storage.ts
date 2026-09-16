@@ -20,7 +20,7 @@ import {
   RestorePoint,
 } from '../types';
 
-const STORAGE_KEY = 'wtm_database_v4';
+const STORAGE_KEY = 'wtm_database_v7';
 
 export interface DatabaseState {
   users: UserProfile[];
@@ -66,49 +66,7 @@ const DEFAULT_SETTINGS: SystemSetting = {
   auto_snapshot_frequency: 'daily',
 };
 
-export const DEFAULT_BOARD_MODES: BoardMode[] = [
-  {
-    id: 'kanban',
-    name: 'Kanban',
-    description: 'Chế độ bảng công việc phân cấp cơ bản theo tiến trình',
-    icon: 'FolderKanban',
-    is_preset: true,
-    clusters: [
-      { id: 'kb-todo', name: 'Cần làm', color: '#6366F1', sort_order: 1 },
-      { id: 'kb-inprogress', name: 'Đang làm', color: '#F59E0B', sort_order: 2 },
-      { id: 'kb-done', name: 'Hoàn thành', color: '#10B981', sort_order: 3 },
-    ],
-  },
-  {
-    id: 'weekday',
-    name: 'Theo ngày (Weekday)',
-    description: 'Chế độ phân chia công việc theo các ngày trong tuần từ Thứ 2 đến Chủ nhật',
-    icon: 'Calendar',
-    is_preset: true,
-    clusters: [
-      { id: 'wd-mon', name: 'Thứ 2', color: '#3B82F6', sort_order: 1 },
-      { id: 'wd-tue', name: 'Thứ 3', color: '#6366F1', sort_order: 2 },
-      { id: 'wd-wed', name: 'Thứ 4', color: '#8B5CF6', sort_order: 3 },
-      { id: 'wd-thu', name: 'Thứ 5', color: '#EC4899', sort_order: 4 },
-      { id: 'wd-fri', name: 'Thứ 6', color: '#F59E0B', sort_order: 5 },
-      { id: 'wd-sat', name: 'Thứ 7', color: '#10B981', sort_order: 6 },
-      { id: 'wd-sun', name: 'Chủ nhật', color: '#EF4444', sort_order: 7 },
-    ],
-  },
-  {
-    id: 'priority',
-    name: 'Mức ưu tiên',
-    description: 'Chế độ phân loại công việc theo mức độ cấp bách và tầm quan trọng',
-    icon: 'Sparkles',
-    is_preset: true,
-    clusters: [
-      { id: 'pr-urgent', name: 'Khẩn cấp', color: '#EF4444', sort_order: 1 },
-      { id: 'pr-high', name: 'Ưu tiên cao', color: '#F59E0B', sort_order: 2 },
-      { id: 'pr-medium', name: 'Trung bình', color: '#3B82F6', sort_order: 3 },
-      { id: 'pr-low', name: 'Thấp', color: '#64748B', sort_order: 4 },
-    ],
-  },
-];
+export const DEFAULT_BOARD_MODES: BoardMode[] = [];
 
 export function getInitialDatabase(): DatabaseState {
   // ZERO seed data besides default admin
@@ -122,7 +80,7 @@ export function getInitialDatabase(): DatabaseState {
     tasks: [],
     smart_areas: [],
     smart_area_items: [],
-    board_modes: DEFAULT_BOARD_MODES,
+    board_modes: [],
     messages: [],
     chat_groups: [],
     attachments: [],
@@ -147,6 +105,28 @@ export function getInitialDatabase(): DatabaseState {
 
 export function loadDatabase(): DatabaseState {
   try {
+    // Clear old versions if they exist to completely wipe previous test DB
+    try {
+      localStorage.removeItem('wtm_database_v6');
+      localStorage.removeItem('wtm_clean_v6_applied');
+      localStorage.removeItem('wtm_database_v5');
+      localStorage.removeItem('wtm_clean_v5_applied');
+      localStorage.removeItem('wtm_database_v4');
+      localStorage.removeItem('wtm_database_v3');
+      localStorage.removeItem('wtm_database_v2');
+      localStorage.removeItem('wtm_database_v1');
+    } catch {
+      // ignore
+    }
+
+    const isCleaned = localStorage.getItem('wtm_clean_v7_applied');
+    if (!isCleaned) {
+      const freshDb = getInitialDatabase();
+      saveDatabase(freshDb);
+      localStorage.setItem('wtm_clean_v7_applied', 'true');
+      return freshDb;
+    }
+
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
       const freshDb = getInitialDatabase();
@@ -163,12 +143,22 @@ export function loadDatabase(): DatabaseState {
         admin.password = '123';
       }
     }
+    if (!parsed.workspaces) parsed.workspaces = [];
+    if (!parsed.workspace_members) parsed.workspace_members = [];
+    if (!parsed.periods) parsed.periods = [];
+    if (!parsed.divisions) parsed.divisions = [];
+    if (!parsed.clusters) parsed.clusters = [];
+    if (!parsed.tasks) parsed.tasks = [];
+    if (!parsed.smart_areas) parsed.smart_areas = [];
+    if (!parsed.smart_area_items) parsed.smart_area_items = [];
+    if (!parsed.messages) parsed.messages = [];
     if (!parsed.chat_groups) parsed.chat_groups = [];
+    if (!parsed.attachments) parsed.attachments = [];
+    if (!parsed.notifications) parsed.notifications = [];
+    if (!parsed.activity_logs) parsed.activity_logs = [];
     if (!parsed.snapshots) parsed.snapshots = [];
     if (!parsed.restore_points) parsed.restore_points = [];
-    if (!parsed.board_modes || parsed.board_modes.length === 0) {
-      parsed.board_modes = DEFAULT_BOARD_MODES;
-    }
+    if (!parsed.board_modes) parsed.board_modes = [];
     return parsed;
   } catch (err) {
     console.error('Error reading localStorage:', err);

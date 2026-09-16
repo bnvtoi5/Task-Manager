@@ -27,11 +27,7 @@ export const CreateBoardModeModal: React.FC<CreateBoardModeModalProps> = ({
 }) => {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [clusters, setClusters] = useState<Array<{ name: string; color: string }>>([
-    { name: 'Cột 1', color: '#6366F1' },
-    { name: 'Cột 2', color: '#F59E0B' },
-    { name: 'Cột 3', color: '#10B981' },
-  ]);
+  const [clusters, setClusters] = useState<Array<{ name: string; color: string }>>([]);
 
   if (!isOpen) return null;
 
@@ -41,7 +37,6 @@ export const CreateBoardModeModal: React.FC<CreateBoardModeModalProps> = ({
   };
 
   const handleRemoveCluster = (index: number) => {
-    if (clusters.length <= 1) return;
     setClusters(clusters.filter((_, i) => i !== index));
   };
 
@@ -70,11 +65,10 @@ export const CreateBoardModeModal: React.FC<CreateBoardModeModalProps> = ({
         sort_order: idx + 1,
       }));
 
-    if (validClusters.length === 0) return;
-
     onCreateMode(name.trim(), description.trim(), validClusters);
     setName('');
     setDescription('');
+    setClusters([]);
     onClose();
   };
 
@@ -150,36 +144,40 @@ export const CreateBoardModeModal: React.FC<CreateBoardModeModalProps> = ({
             </div>
 
             <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-              {clusters.map((cluster, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-center gap-2 p-2 rounded-xl bg-slate-50 dark:bg-[#141e30] border border-slate-200/80 dark:border-slate-800"
-                >
-                  <span className="text-[11px] font-bold text-slate-400 w-4 text-center">
-                    {idx + 1}
-                  </span>
-                  <input
-                    type="text"
-                    required
-                    value={cluster.name}
-                    onChange={(e) => handleClusterNameChange(idx, e.target.value)}
-                    placeholder="Tên cột..."
-                    className="flex-1 px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#0c1220] text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
-                  />
-                  <div className="flex items-center gap-1">
-                    {PRESET_COLORS.slice(0, 5).map((color) => (
-                      <button
-                        key={color}
-                        type="button"
-                        onClick={() => handleClusterColorChange(idx, color)}
-                        className={`w-5 h-5 rounded-full transition-transform ${
-                          cluster.color === color ? 'scale-125 ring-2 ring-indigo-500 ring-offset-1' : 'opacity-70 hover:opacity-100'
-                        }`}
-                        style={{ backgroundColor: color }}
-                      />
-                    ))}
-                  </div>
-                  {clusters.length > 1 && (
+              {clusters.length === 0 ? (
+                <div className="p-4 rounded-xl border border-dashed border-slate-200 dark:border-slate-800 text-center text-slate-400 dark:text-slate-500 text-xs">
+                  Chưa có cụm/cột nào. Bạn có thể tạo chế độ bảng trước rồi thêm cột sau, hoặc nhấn <strong>&quot;Thêm cột&quot;</strong> ở trên.
+                </div>
+              ) : (
+                clusters.map((cluster, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-center gap-2 p-2 rounded-xl bg-slate-50 dark:bg-[#141e30] border border-slate-200/80 dark:border-slate-800"
+                  >
+                    <span className="text-[11px] font-bold text-slate-400 w-4 text-center">
+                      {idx + 1}
+                    </span>
+                    <input
+                      type="text"
+                      required
+                      value={cluster.name}
+                      onChange={(e) => handleClusterNameChange(idx, e.target.value)}
+                      placeholder="Tên cột..."
+                      className="flex-1 px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#0c1220] text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                    />
+                    <div className="flex items-center gap-1">
+                      {PRESET_COLORS.slice(0, 5).map((color) => (
+                        <button
+                          key={color}
+                          type="button"
+                          onClick={() => handleClusterColorChange(idx, color)}
+                          className={`w-5 h-5 rounded-full transition-transform ${
+                            cluster.color === color ? 'scale-125 ring-2 ring-indigo-500 ring-offset-1' : 'opacity-70 hover:opacity-100'
+                          }`}
+                          style={{ backgroundColor: color }}
+                        />
+                      ))}
+                    </div>
                     <button
                       type="button"
                       onClick={() => handleRemoveCluster(idx)}
@@ -188,9 +186,9 @@ export const CreateBoardModeModal: React.FC<CreateBoardModeModalProps> = ({
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
-                  )}
-                </div>
-              ))}
+                  </div>
+                ))
+              )}
             </div>
           </div>
 

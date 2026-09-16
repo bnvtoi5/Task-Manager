@@ -7,7 +7,6 @@ import {
   Lock,
   Users,
   History,
-  Sparkles,
   Settings,
   X,
   ChevronRight,
@@ -363,22 +362,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               Công cụ Phòng
             </div>
             <div className="space-y-0.5">
-              <button
-                type="button"
-                onClick={() => {
-                  setViewMode('smart_area');
-                  handleItemClick();
-                }}
-                className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl transition ${
-                  viewMode === 'smart_area'
-                    ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 font-semibold'
-                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-slate-800/80'
-                }`}
-              >
-                <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
-                <span>Smart Area Canvas</span>
-              </button>
-
               <button
                 type="button"
                 onClick={() => {

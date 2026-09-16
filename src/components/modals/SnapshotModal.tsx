@@ -23,6 +23,9 @@ import {
   Info,
   Layers,
   Sparkles,
+  Zap,
+  ArrowRight,
+  RefreshCw,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { DatabaseSnapshot, Division, RestorePoint } from '../../types';
@@ -40,241 +43,44 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({ isOpen, onClose })
     activeWorkspace,
     activeDivision,
     createSnapshot,
-    rollbackDivisionsFromSnapshot,
-    revertFromRestorePoint,
-    deleteRestorePoint,
     deleteSnapshot,
     setSnapshotFrequency,
     setAutoSnapshotExcludedDivisions,
     importSnapshotFromFile,
+    recordRollbackCheckpoint,
+    executeRollback,
+    deleteRestorePoint,
+    clearAllRollbackPoints,
   } = useApp();
 
   const currentWorkspaceId = activeWorkspace?.id;
 
-  const [activeTab, setActiveTab] = useState<'snapshots' | 'restore_points' | 'io' | 'settings'>('snapshots');
+  // Default tab is 'rollback' as requested by user!
+  const [activeTab, setActiveTab] = useState<'rollback' | 'snapshots' | 'io' | 'settings'>('rollback');
+  const [rollbackScope, setRollbackScope] = useState<'all' | 'workspace'>('all');
+  const [rollbackSearch, setRollbackSearch] = useState('');
+
+  // Manual Rollback Checkpoint Creation Form
+  const [isCreatingManualPoint, setIsCreatingManualPoint] = useState(false);
+  const [manualPointName, setManualPointName] = useState('');
+  const [manualPointDesc, setManualPointDesc] = useState('');
+
+  // Rollback confirmation dialog state
+  const [pointToRollbackFull, setPointToRollbackFull] = useState<RestorePoint | DatabaseSnapshot | null>(null);
+  const [pointToRollbackSelective, setPointToRollbackSelective] = useState<RestorePoint | DatabaseSnapshot | null>(null);
+  const [selectedDivisionIdsToRollback, setSelectedDivisionIdsToRollback] = useState<string[]>([]);
+  const [isClearingAllPoints, setIsClearingAllPoints] = useState(false);
+
+  // Snapshot creation state
   const [newSnapshotName, setNewSnapshotName] = useState('');
   const [newSnapshotDesc, setNewSnapshotDesc] = useState('');
-  const [isCreating, setIsCreating] = useState(false);
+  const [isCreatingSnapshot, setIsCreatingSnapshot] = useState(false);
   const [selectedDivisionsToCreate, setSelectedDivisionsToCreate] = useState<string[]>([]);
   const [snapshotSearch, setSnapshotSearch] = useState('');
   const [snapshotTypeFilter, setSnapshotTypeFilter] = useState<'all' | 'manual' | 'auto'>('all');
 
-  // Rollback dialog state
-  const [selectedSnapshotForRollback, setSelectedSnapshotForRollback] = useState<DatabaseSnapshot | null>(null);
-  const [selectedDivisionIdsToRollback, setSelectedDivisionIdsToRollback] = useState<string[]>([]);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-  const [restorePointToRevert, setRestorePointToRevert] = useState<RestorePoint | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Check if current user is member or owner or admin of the room
-  const isRoomMember = useMemo(() => {
-    if (!currentUser || !activeWorkspace) return false;
-    if (currentUser.role === 'admin') return true;
-    if (activeWorkspace.owner_id === currentUser.id) return true;
-    return (activeWorkspace.members || []).some((m) => m.user_id === currentUser.id);
-  }, [currentUser, activeWorkspace]);
-
-  // Filter snapshots strictly for CURRENT ROOM/WORKSPACE and authenticated room membership
-  const snapshots = useMemo(() => {
-    if (!currentWorkspaceId || !isRoomMember) return [];
-    return (db.snapshots || []).filter((s) => s.workspace_id === currentWorkspaceId);
-  }, [db.snapshots, currentWorkspaceId, isRoomMember]);
-
-  // Filter restore points strictly for CURRENT ROOM/WORKSPACE
-  const restorePoints = useMemo(() => {
-    if (!currentWorkspaceId || !isRoomMember) return [];
-    return (db.restore_points || []).filter((rp) => rp.workspace_id === currentWorkspaceId);
-  }, [db.restore_points, currentWorkspaceId, isRoomMember]);
-
-  const currentFrequency = db.settings?.auto_snapshot_frequency || 'daily';
-  const excludedAutoDivisionIds = db.settings?.auto_snapshot_excluded_division_ids || [];
-
-  // All divisions in current room
-  const roomDivisions = useMemo(() => {
-    return db.divisions.filter((d) => !currentWorkspaceId || d.workspace_id === currentWorkspaceId);
-  }, [db.divisions, currentWorkspaceId]);
-
-  // Eligible divisions that the current user is permitted to interact with (public + own private)
-  const eligibleDivisions = useMemo(() => {
-    return roomDivisions.map((div) => {
-      const isPrivate = div.visibility === 'private';
-      const isOwner = !isPrivate || div.owner_id === currentUser?.id;
-      const clustersCount = db.clusters.filter((c) => c.division_id === div.id).length;
-      const tasksCount = db.tasks.filter((t) => t.division_id === div.id).length;
-      const ownerUser = db.users.find((u) => u.id === div.owner_id);
-      return {
-        ...div,
-        isPrivate,
-        canSelect: isOwner,
-        ownerName: ownerUser?.display_name || div.owner_id,
-        clustersCount,
-        tasksCount,
-      };
-    });
-  }, [roomDivisions, db.clusters, db.tasks, db.users, currentUser]);
-
-  // Initialize selected divisions for manual creation when form opens
-  const handleOpenCreate = () => {
-    const defaultIds = eligibleDivisions.filter((d) => d.canSelect).map((d) => d.id);
-    setSelectedDivisionsToCreate(defaultIds);
-    setNewSnapshotName('');
-    setNewSnapshotDesc('');
-    setIsCreating(true);
-  };
-
-  const handleToggleDivisionCreate = (divId: string) => {
-    setSelectedDivisionsToCreate((prev) =>
-      prev.includes(divId) ? prev.filter((id) => id !== divId) : [...prev, divId]
-    );
-  };
-
-  const handleSelectAllDivisionsToCreate = () => {
-    const allIds = eligibleDivisions.filter((d) => d.canSelect).map((d) => d.id);
-    setSelectedDivisionsToCreate(allIds);
-  };
-
-  const handleDeselectAllDivisionsToCreate = () => {
-    setSelectedDivisionsToCreate([]);
-  };
-
-  // Filtered snapshots list
-  const filteredSnapshots = useMemo(() => {
-    return snapshots
-      .filter((snap) => {
-        // Type filter: all / manual / auto
-        const isAuto = snap.description?.includes('Tự động') || snap.auto_generated;
-        if (snapshotTypeFilter === 'auto') {
-          if (!isAuto) return false;
-        } else if (snapshotTypeFilter === 'manual') {
-          if (isAuto) return false;
-        }
-
-        // Search text
-        if (snapshotSearch.trim()) {
-          const q = snapshotSearch.toLowerCase().trim();
-          const matchName = snap.name?.toLowerCase().includes(q);
-          const matchDesc = snap.description?.toLowerCase().includes(q);
-          const matchAuthor = snap.created_by_name?.toLowerCase().includes(q);
-          const matchDivs = snap.saved_division_names?.some((n) => n.toLowerCase().includes(q));
-          return matchName || matchDesc || matchAuthor || matchDivs;
-        }
-        return true;
-      })
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-  }, [snapshots, snapshotTypeFilter, snapshotSearch]);
-
-  // Parsed divisions for the snapshot currently opened for rollback
-  const parsedSnapshotState = useMemo<DatabaseState | null>(() => {
-    if (!selectedSnapshotForRollback) return null;
-    try {
-      return JSON.parse(selectedSnapshotForRollback.data_state) as DatabaseState;
-    } catch {
-      return null;
-    }
-  }, [selectedSnapshotForRollback]);
-
-  const availableDivisionsInSnapshot = useMemo(() => {
-    if (!parsedSnapshotState) return [];
-    return (parsedSnapshotState.divisions || []).map((div) => {
-      const snapClusters = (parsedSnapshotState.clusters || []).filter((c) => c.division_id === div.id);
-      const snapTasks = (parsedSnapshotState.tasks || []).filter((t) => t.division_id === div.id);
-      const isPrivate = div.visibility === 'private';
-      const isOwner = !isPrivate || div.owner_id === currentUser?.id;
-
-      // Current counterpart in active DB
-      const currentDiv = db.divisions.find((d) => d.id === div.id);
-      const currentClusters = db.clusters.filter((c) => c.division_id === div.id);
-      const currentTasks = db.tasks.filter((t) => t.division_id === div.id);
-      const ownerUser = db.users.find((u) => u.id === div.owner_id);
-
-      return {
-        ...div,
-        clusterCount: snapClusters.length,
-        taskCount: snapTasks.length,
-        isPrivate,
-        isOwner,
-        canRollback: isOwner,
-        ownerName: ownerUser?.display_name || div.owner_id,
-        currentExists: !!currentDiv,
-        currentClustersCount: currentClusters.length,
-        currentTasksCount: currentTasks.length,
-      };
-    });
-  }, [parsedSnapshotState, db.divisions, db.clusters, db.tasks, db.users, currentUser]);
-
-  // Open rollback modal
-  const handleOpenRollbackModal = (snap: DatabaseSnapshot) => {
-    setSelectedSnapshotForRollback(snap);
-    try {
-      const parsed = JSON.parse(snap.data_state) as DatabaseState;
-      const divs = parsed.divisions || [];
-      const allowedDivs = divs.filter(
-        (d) => d.visibility !== 'private' || d.owner_id === currentUser?.id
-      );
-      const activeMatch = allowedDivs.find((d) => d.id === activeDivision?.id);
-      if (activeMatch) {
-        setSelectedDivisionIdsToRollback([activeMatch.id]);
-      } else if (allowedDivs.length > 0) {
-        setSelectedDivisionIdsToRollback([allowedDivs[0].id]);
-      } else {
-        setSelectedDivisionIdsToRollback([]);
-      }
-    } catch {
-      setSelectedDivisionIdsToRollback([]);
-    }
-  };
-
-  const handleToggleDivisionSelect = (divisionId: string) => {
-    setSelectedDivisionIdsToRollback((prev) =>
-      prev.includes(divisionId) ? prev.filter((id) => id !== divisionId) : [...prev, divisionId]
-    );
-  };
-
-  const handleSelectAllPermittedDivisions = () => {
-    const permittedIds = availableDivisionsInSnapshot.filter((d) => d.canRollback).map((d) => d.id);
-    setSelectedDivisionIdsToRollback(permittedIds);
-  };
-
-  const handleDeselectAllDivisions = () => {
-    setSelectedDivisionIdsToRollback([]);
-  };
-
-  const handleExecuteRollbackDivision = () => {
-    if (!selectedSnapshotForRollback || selectedDivisionIdsToRollback.length === 0) return;
-    const res = rollbackDivisionsFromSnapshot(selectedSnapshotForRollback.id, selectedDivisionIdsToRollback);
-    if (res.success) {
-      showNotice('success', res.message);
-      setSelectedSnapshotForRollback(null);
-    } else {
-      showNotice('error', res.message);
-    }
-  };
-
-  const handleExecuteRevert = (rp: RestorePoint) => {
-    const res = revertFromRestorePoint(rp.id);
-    if (res.success) {
-      showNotice('success', res.message);
-      setRestorePointToRevert(null);
-    } else {
-      showNotice('error', res.message);
-    }
-  };
-
-  const handleCreate = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newSnapshotName.trim()) return;
-    if (selectedDivisionsToCreate.length === 0) {
-      showNotice('error', 'Vui lòng chọn ít nhất 1 phân chia để lưu vào bản sao lưu này.');
-      return;
-    }
-    createSnapshot(newSnapshotName.trim(), newSnapshotDesc.trim() || undefined, false, selectedDivisionsToCreate);
-    setNewSnapshotName('');
-    setNewSnapshotDesc('');
-    setIsCreating(false);
-    setSnapshotTypeFilter('all');
-    setSnapshotSearch('');
-    showNotice('success', `Đã lưu bản sao lưu mới với ${selectedDivisionsToCreate.length} phân chia đã chọn!`);
-  };
 
   const showNotice = (type: 'success' | 'error', message: string) => {
     setNotification({ type, message });
@@ -283,16 +89,225 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({ isOpen, onClose })
     }, 5000);
   };
 
+  // Check if current user is member or owner or admin of the room
+  const isRoomMember = useMemo(() => {
+    if (!currentUser) return false;
+    if (currentUser.role === 'admin') return true;
+    if (!activeWorkspace) return true;
+    if (activeWorkspace.owner_id === currentUser.id) return true;
+    return (activeWorkspace.members || []).some((m) => m.user_id === currentUser.id);
+  }, [currentUser, activeWorkspace]);
+
+  // All restore points
+  const allRestorePoints = useMemo(() => {
+    return db.restore_points || [];
+  }, [db.restore_points]);
+
+  // Filtered restore points
+  const filteredRestorePoints = useMemo(() => {
+    return allRestorePoints.filter((rp) => {
+      // Scope filter
+      if (rollbackScope === 'workspace' && currentWorkspaceId) {
+        if (rp.workspace_id && rp.workspace_id !== currentWorkspaceId) return false;
+      }
+      // Search text
+      if (rollbackSearch.trim()) {
+        const query = rollbackSearch.toLowerCase().trim();
+        const matchName = rp.name?.toLowerCase().includes(query);
+        const matchDesc = rp.description?.toLowerCase().includes(query);
+        const matchUser = rp.created_by_name?.toLowerCase().includes(query);
+        if (!matchName && !matchDesc && !matchUser) return false;
+      }
+      return true;
+    });
+  }, [allRestorePoints, rollbackScope, currentWorkspaceId, rollbackSearch]);
+
+  // Snapshots list
+  const snapshots = useMemo(() => {
+    return db.snapshots || [];
+  }, [db.snapshots]);
+
+  const filteredSnapshots = useMemo(() => {
+    return snapshots.filter((snap) => {
+      if (rollbackScope === 'workspace' && currentWorkspaceId) {
+        if (snap.workspace_id && snap.workspace_id !== currentWorkspaceId) return false;
+      }
+      const isAuto = snap.description?.includes('Tự động') || snap.auto_generated;
+      if (snapshotTypeFilter === 'auto' && !isAuto) return false;
+      if (snapshotTypeFilter === 'manual' && isAuto) return false;
+
+      if (snapshotSearch.trim()) {
+        const q = snapshotSearch.toLowerCase().trim();
+        const matchName = snap.name.toLowerCase().includes(q);
+        const matchDesc = snap.description?.toLowerCase().includes(q);
+        const matchUser = snap.created_by_name?.toLowerCase().includes(q);
+        if (!matchName && !matchDesc && !matchUser) return false;
+      }
+      return true;
+    });
+  }, [snapshots, rollbackScope, currentWorkspaceId, snapshotTypeFilter, snapshotSearch]);
+
+  // Eligible divisions for snapshot creation:
+  // User explicitly wants:
+  // "snapshot là lưu các division public và tất cả division private (private chỉ tạo thuộc về acc đó, ko lấy của acc khác)"
+  const eligibleDivisions = useMemo(() => {
+    return db.divisions
+      .filter((d) => {
+        if (currentWorkspaceId && d.workspace_id && d.workspace_id !== currentWorkspaceId) return false;
+        if (d.visibility === 'public') return true;
+        if (d.visibility === 'private' && currentUser && d.owner_id === currentUser.id) return true;
+        return false;
+      })
+      .map((div) => {
+        const isPrivate = div.visibility === 'private';
+        const clustersCount = db.clusters.filter((c) => c.division_id === div.id).length;
+        const tasksCount = db.tasks.filter((t) => t.division_id === div.id).length;
+        const ownerUser = db.users.find((u) => u.id === div.owner_id);
+        return {
+          ...div,
+          isPrivate,
+          canSelect: true,
+          ownerName: ownerUser?.display_name || div.owner_id,
+          clustersCount,
+          tasksCount,
+        };
+      });
+  }, [db.divisions, currentWorkspaceId, currentUser, db.clusters, db.tasks, db.users]);
+
+  // Auto pre-select all eligible divisions when opening create snapshot form
+  useEffect(() => {
+    if (isCreatingSnapshot && selectedDivisionsToCreate.length === 0 && eligibleDivisions.length > 0) {
+      setSelectedDivisionsToCreate(eligibleDivisions.map((d) => d.id));
+    }
+  }, [isCreatingSnapshot, eligibleDivisions]);
+
+  const currentFrequency = db.settings?.auto_snapshot_frequency || 'daily';
+  const excludedAutoDivisionIds = db.settings?.auto_snapshot_excluded_division_ids || [];
+
+  // Parse source for selective rollback
+  const divisionsInSelectiveSource = useMemo(() => {
+    if (!pointToRollbackSelective) return [];
+    try {
+      const parsed = JSON.parse(pointToRollbackSelective.data_state) as DatabaseState;
+      const divs = parsed.divisions || [];
+      return divs
+        .filter(
+          (d) =>
+            d.visibility === 'public' ||
+            (d.visibility === 'private' && currentUser && d.owner_id === currentUser.id)
+        )
+        .map((d) => {
+          const clustersCount = (parsed.clusters || []).filter((c) => c.division_id === d.id).length;
+          const tasksCount = (parsed.tasks || []).filter((t) => t.division_id === d.id).length;
+          const isPrivate = d.visibility === 'private';
+          return {
+            ...d,
+            clustersCount,
+            tasksCount,
+            isPrivate,
+            canRollback: true,
+          };
+        });
+    } catch {
+      return [];
+    }
+  }, [pointToRollbackSelective, currentUser]);
+
+  // Open selective rollback
+  const handleOpenSelectiveRollback = (item: RestorePoint | DatabaseSnapshot) => {
+    setPointToRollbackSelective(item);
+    try {
+      const parsed = JSON.parse(item.data_state) as DatabaseState;
+      const divs = parsed.divisions || [];
+      const permitted = divs.filter(
+        (d) =>
+          d.visibility === 'public' ||
+          (d.visibility === 'private' && currentUser && d.owner_id === currentUser.id)
+      );
+      if (permitted.length > 0) {
+        setSelectedDivisionIdsToRollback(permitted.map((d) => d.id));
+      } else {
+        setSelectedDivisionIdsToRollback([]);
+      }
+    } catch {
+      setSelectedDivisionIdsToRollback([]);
+    }
+  };
+
+  // Execute full rollback
+  const handleConfirmFullRollback = () => {
+    if (!pointToRollbackFull) return;
+    const res = executeRollback(pointToRollbackFull.id, 'full');
+    if (res.success) {
+      showNotice('success', res.message);
+      setPointToRollbackFull(null);
+    } else {
+      showNotice('error', res.message);
+    }
+  };
+
+  // Execute selective rollback
+  const handleConfirmSelectiveRollback = () => {
+    if (!pointToRollbackSelective || selectedDivisionIdsToRollback.length === 0) return;
+    const res = executeRollback(pointToRollbackSelective.id, 'selective', selectedDivisionIdsToRollback);
+    if (res.success) {
+      showNotice('success', res.message);
+      setPointToRollbackSelective(null);
+    } else {
+      showNotice('error', res.message);
+    }
+  };
+
+  // Create manual checkpoint
+  const handleCreateManualPoint = (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = manualPointName.trim() || `Điểm lưu thủ công ${new Date().toLocaleTimeString('vi-VN')}`;
+    const desc = manualPointDesc.trim() || 'Tạo bởi người dùng';
+    const point = recordRollbackCheckpoint(name, desc, 'general');
+    setManualPointName('');
+    setManualPointDesc('');
+    setIsCreatingManualPoint(false);
+    showNotice('success', `Đã lưu điểm Rollback: "${point.name}"!`);
+  };
+
+  // Create snapshot
+  const handleCreateSnapshot = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSnapshotName.trim()) return;
+    if (selectedDivisionsToCreate.length === 0) {
+      showNotice('error', 'Vui lòng chọn ít nhất 1 phân chia để lưu vào bản sao lưu này.');
+      return;
+    }
+    const snap = createSnapshot(
+      newSnapshotName.trim(),
+      newSnapshotDesc.trim() || undefined,
+      false,
+      selectedDivisionsToCreate
+    );
+    setNewSnapshotName('');
+    setNewSnapshotDesc('');
+    setIsCreatingSnapshot(false);
+    showNotice('success', `Đã lưu bản sao lưu "${snap.name}" với ${selectedDivisionsToCreate.length} phân chia!`);
+  };
+
+  // Clear all rollback points
+  const handleConfirmClearAllPoints = () => {
+    clearAllRollbackPoints();
+    setIsClearingAllPoints(false);
+    showNotice('success', 'Đã dọn dẹp sạch toàn bộ các điểm Rollback cũ!');
+  };
+
+  // JSON Export / Import
   const handleExportJSON = () => {
     const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(db, null, 2));
     const downloadAnchor = document.createElement('a');
     downloadAnchor.setAttribute('href', dataStr);
     const dateStr = new Date().toISOString().replace(/[:.]/g, '-');
-    downloadAnchor.setAttribute('download', `workplace_${activeWorkspace?.name || 'backup'}_${dateStr}.json`);
+    downloadAnchor.setAttribute('download', `taskmanager_backup_${dateStr}.json`);
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
-    showNotice('success', 'Đã tải file sao lưu JSON về máy tính!');
+    showNotice('success', 'Đã xuất file sao lưu JSON thành công!');
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -317,64 +332,71 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({ isOpen, onClose })
     }
   };
 
-  // Toggle exclusion for auto snapshot
-  const handleToggleAutoExcludeDivision = (divId: string) => {
-    let nextExcluded: string[];
-    if (excludedAutoDivisionIds.includes(divId)) {
-      nextExcluded = excludedAutoDivisionIds.filter((id) => id !== divId);
-    } else {
-      nextExcluded = [...excludedAutoDivisionIds, divId];
+  const getActionBadge = (actionType?: string) => {
+    switch (actionType) {
+      case 'delete_task':
+        return { label: 'Xóa việc', color: 'bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300 border-rose-200 dark:border-rose-800' };
+      case 'bulk_action':
+        return { label: 'Hàng loạt', color: 'bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 border-amber-200 dark:border-amber-800' };
+      case 'delete_division':
+        return { label: 'Xóa phân chia', color: 'bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300 border-red-200 dark:border-red-800' };
+      case 'delete_cluster':
+        return { label: 'Xóa cụm cột', color: 'bg-orange-100 text-orange-700 dark:bg-orange-950/60 dark:text-orange-300 border-orange-200 dark:border-orange-800' };
+      case 'delete_period':
+        return { label: 'Xóa giai đoạn', color: 'bg-pink-100 text-pink-700 dark:bg-pink-950/60 dark:text-pink-300 border-pink-200 dark:border-pink-800' };
+      case 'delete_workspace':
+        return { label: 'Xóa phòng', color: 'bg-purple-100 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border-purple-200 dark:border-purple-800' };
+      case 'move_task':
+        return { label: 'Di chuyển việc', color: 'bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border-blue-200 dark:border-blue-800' };
+      case 'safety':
+        return { label: 'Điểm an toàn', color: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800' };
+      case 'manual_snapshot':
+        return { label: 'Bản sao lưu', color: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800' };
+      default:
+        return { label: 'Điểm lưu', color: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border-slate-200 dark:border-slate-700' };
     }
-    setAutoSnapshotExcludedDivisions(nextExcluded);
   };
 
-  const handleSelectAllAutoDivisions = () => {
-    // Empty exclusion list means all are included
-    setAutoSnapshotExcludedDivisions([]);
-    showNotice('success', 'Đã tích chọn tất cả phân chia cho chế độ tự động sao lưu.');
+  const formatRelativeTime = (isoString: string) => {
+    try {
+      const date = new Date(isoString);
+      const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
+      if (diffSec < 60) return 'Vừa xong';
+      if (diffSec < 3600) return `${Math.floor(diffSec / 60)} phút trước`;
+      if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} giờ trước`;
+      return date.toLocaleDateString('vi-VN', {
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    } catch {
+      return isoString;
+    }
   };
-
-  const handleDeselectAllAutoDivisions = () => {
-    // Add all eligible division ids to excluded list
-    const allIds = eligibleDivisions.filter((d) => d.canSelect).map((d) => d.id);
-    setAutoSnapshotExcludedDivisions(allIds);
-    showNotice('success', 'Đã bỏ chọn tất cả phân chia trong chế độ tự động sao lưu.');
-  };
-
-  const handleTriggerTestAutoSnapshot = () => {
-    const snap = createSnapshot(undefined, 'Sao lưu tự động thử nghiệm theo cấu hình phân chia', true);
-    showNotice(
-      'success',
-      `Đã tạo bản sao lưu tự động thử nghiệm "${snap.name}" với ${snap.stats.divisions_count} phân chia!`
-    );
-  };
-
-  const hasSelectedPublicDivision = availableDivisionsInSnapshot.some(
-    (d) => selectedDivisionIdsToRollback.includes(d.id) && !d.isPrivate
-  );
 
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
-      <div className="w-full max-w-3xl bg-white dark:bg-[#0e1626] border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden">
+      <div className="w-full max-w-4xl bg-white dark:bg-[#0e1626] border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-800 shrink-0 bg-slate-50/50 dark:bg-[#0a101d]/50">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800">
-              <History className="w-5 h-5" />
+              <RotateCcw className="w-5 h-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                  Sao lưu & Rollback
+                  Trung tâm Rollback & Khôi phục Dữ liệu
                 </h3>
                 <span className="text-xs px-2.5 py-0.5 rounded-full font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                  Phòng: {activeWorkspace?.name || 'Hiện tại'}
+                  Phòng: {activeWorkspace?.name || 'Tất cả'}
                 </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Quản lý độc lập theo phòng • Tùy chọn phân chia khi lưu • Tự động hoàn tác an toàn
+                Điểm Rollback tạo thủ công & Bản sao lưu tự động theo giờ Việt Nam • Hoàn tác toàn bộ hoặc chọn lọc an toàn
               </p>
             </div>
           </div>
@@ -405,353 +427,312 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({ isOpen, onClose })
           </div>
         )}
 
-        {/* Tabs Bar */}
+        {/* Navigation Tabs */}
         <div className="flex items-center gap-2 px-6 pt-3 border-b border-slate-200 dark:border-slate-800 shrink-0 overflow-x-auto">
           <button
             type="button"
+            onClick={() => setActiveTab('rollback')}
+            className={`pb-2.5 px-3 text-xs font-bold border-b-2 whitespace-nowrap transition flex items-center gap-1.5 ${
+              activeTab === 'rollback'
+                ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400'
+                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <Zap className="w-3.5 h-3.5 text-amber-500" />
+            <span>Điểm Rollback & Hoàn tác ({allRestorePoints.length})</span>
+            {allRestorePoints.length > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 font-bold">
+                {allRestorePoints.length}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveTab('snapshots')}
-            className={`pb-2.5 px-3 text-xs font-bold border-b-2 whitespace-nowrap transition ${
+            className={`pb-2.5 px-3 text-xs font-bold border-b-2 whitespace-nowrap transition flex items-center gap-1.5 ${
               activeTab === 'snapshots'
                 ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
-            Bản sao lưu phòng ({snapshots.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('restore_points')}
-            className={`pb-2.5 px-3 text-xs font-bold border-b-2 whitespace-nowrap transition flex items-center gap-1.5 ${
-              activeTab === 'restore_points'
-                ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400'
-                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-            }`}
-          >
-            <span>Điểm hoàn tác chung ({restorePoints.length})</span>
-            {restorePoints.length > 0 && (
-              <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('settings')}
-            className={`pb-2.5 px-3 text-xs font-bold border-b-2 whitespace-nowrap transition ${
-              activeTab === 'settings'
-                ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400'
-                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-            }`}
-          >
-            Cài đặt tự động & Phân chia
+            <History className="w-3.5 h-3.5 text-indigo-500" />
+            <span>Bản sao lưu (Snapshots) ({snapshots.length})</span>
           </button>
           <button
             type="button"
             onClick={() => setActiveTab('io')}
-            className={`pb-2.5 px-3 text-xs font-bold border-b-2 whitespace-nowrap transition ${
+            className={`pb-2.5 px-3 text-xs font-bold border-b-2 whitespace-nowrap transition flex items-center gap-1.5 ${
               activeTab === 'io'
                 ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
-            Xuất / Nhập File
+            <Database className="w-3.5 h-3.5 text-emerald-500" />
+            <span>Xuất / Nhập JSON</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('settings')}
+            className={`pb-2.5 px-3 text-xs font-bold border-b-2 whitespace-nowrap transition flex items-center gap-1.5 ${
+              activeTab === 'settings'
+                ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400'
+                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <Sliders className="w-3.5 h-3.5 text-slate-400" />
+            <span>Cài đặt tự động</span>
           </button>
         </div>
 
-        {/* Content Area */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
-          {activeTab === 'snapshots' && (
+        {/* Tab Content Body */}
+        <div className="flex-1 overflow-y-auto p-6">
+          {/* TAB 1: ROLLBACK & RESTORE POINTS */}
+          {activeTab === 'rollback' && (
             <div className="space-y-4">
-              {/* Filter & Search Bar */}
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                <div className="flex flex-wrap items-center gap-2 flex-1">
-                  {/* Search Input */}
-                  <div className="relative flex-1 min-w-[200px]">
-                    <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              {/* Top Action Bar */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 bg-slate-50 dark:bg-slate-900/50 p-3 rounded-2xl border border-slate-200/80 dark:border-slate-800">
+                {/* Search & Scope */}
+                <div className="flex items-center gap-2 flex-1">
+                  <div className="relative flex-1">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
                       type="text"
-                      placeholder="Tìm kiếm bản sao lưu trong phòng..."
-                      value={snapshotSearch}
-                      onChange={(e) => setSnapshotSearch(e.target.value)}
-                      className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#111927] text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                      value={rollbackSearch}
+                      onChange={(e) => setRollbackSearch(e.target.value)}
+                      placeholder="Tìm điểm rollback theo tên, người tạo..."
+                      className="w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
                     />
                   </div>
 
-                  {/* Filter chips: Tất cả / Thủ công / Tự động */}
-                  <div className="flex items-center gap-1.5">
-                    {(
-                      [
-                        { id: 'all', label: 'Tất cả' },
-                        { id: 'manual', label: 'Thủ công' },
-                        { id: 'auto', label: 'Tự động' },
-                      ] as const
-                    ).map((f) => (
-                      <button
-                        key={f.id}
-                        type="button"
-                        onClick={() => setSnapshotTypeFilter(f.id)}
-                        className={`px-3 py-1.5 text-xs font-bold rounded-xl transition ${
-                          snapshotTypeFilter === f.id
-                            ? 'bg-indigo-600 text-white shadow-2xs'
-                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200/80 dark:hover:bg-slate-700'
-                        }`}
-                      >
-                        {f.label}
-                      </button>
-                    ))}
+                  {/* Scope filter */}
+                  <div className="flex items-center bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-0.5 shrink-0 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setRollbackScope('all')}
+                      className={`px-2.5 py-1 rounded-lg font-semibold transition ${
+                        rollbackScope === 'all'
+                          ? 'bg-indigo-600 text-white'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                      }`}
+                    >
+                      Tất cả ({allRestorePoints.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRollbackScope('workspace')}
+                      className={`px-2.5 py-1 rounded-lg font-semibold transition ${
+                        rollbackScope === 'workspace'
+                          ? 'bg-indigo-600 text-white'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                      }`}
+                    >
+                      Phòng hiện tại
+                    </button>
                   </div>
                 </div>
 
-                {!isCreating && (
+                {/* Buttons */}
+                <div className="flex items-center gap-2 shrink-0">
                   <button
                     type="button"
-                    onClick={handleOpenCreate}
-                    className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition shadow-xs shrink-0 self-start md:self-auto"
+                    onClick={() => setIsCreatingManualPoint((v) => !v)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition shadow-xs"
                   >
                     <Plus className="w-3.5 h-3.5" />
-                    <span>Tạo bản sao lưu mới</span>
+                    <span>Lưu điểm ngay</span>
                   </button>
-                )}
-              </div>
 
-              {/* Create Snapshot Form with Division Selection */}
-              {isCreating && (
-                <form
-                  onSubmit={handleCreate}
-                  className="p-4 rounded-2xl border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50/40 dark:bg-indigo-950/20 space-y-3.5 animate-in fade-in"
-                >
-                  <div className="flex items-center justify-between border-b border-indigo-100 dark:border-indigo-900/60 pb-2">
-                    <div className="text-xs font-bold text-indigo-950 dark:text-indigo-200 flex items-center gap-1.5">
-                      <Database className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                      <span>Tạo bản sao lưu mới cho phòng &quot;{activeWorkspace?.name}&quot;</span>
-                    </div>
+                  {allRestorePoints.length > 0 && (
                     <button
                       type="button"
-                      onClick={() => setIsCreating(false)}
-                      className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1"
+                      onClick={() => setIsClearingAllPoints(true)}
+                      className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-xl transition border border-rose-200 dark:border-rose-900"
+                      title="Xóa tất cả điểm rollback cũ"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Dọn sạch</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Manual Checkpoint Form */}
+              {isCreatingManualPoint && (
+                <form
+                  onSubmit={handleCreateManualPoint}
+                  className="p-4 rounded-2xl border border-indigo-200 dark:border-indigo-900 bg-indigo-50/50 dark:bg-indigo-950/30 space-y-3 animate-in fade-in"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
+                      Lưu điểm Rollback tức thì cho toàn bộ trạng thái hiện tại
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIsCreatingManualPoint(false)}
+                      className="text-slate-400 hover:text-slate-600"
                     >
                       <X className="w-4 h-4" />
                     </button>
                   </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
-                        Tên bản sao lưu <span className="text-rose-500">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="VD: Trước khi dọn dẹp phân chia..."
-                        value={newSnapshotName}
-                        onChange={(e) => setNewSnapshotName(e.target.value)}
-                        required
-                        className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-indigo-500/30"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
-                        Ghi chú thêm (Tùy chọn)
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="VD: Đã hoàn tất sprint tháng 9..."
-                        value={newSnapshotDesc}
-                        onChange={(e) => setNewSnapshotDesc(e.target.value)}
-                        className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-indigo-500/30"
-                      />
-                    </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      value={manualPointName}
+                      onChange={(e) => setManualPointName(e.target.value)}
+                      placeholder="Tên điểm lưu (VD: Trước khi chỉnh sửa lớn)"
+                      className="px-3 py-1.5 text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl"
+                      autoFocus
+                    />
+                    <input
+                      type="text"
+                      value={manualPointDesc}
+                      onChange={(e) => setManualPointDesc(e.target.value)}
+                      placeholder="Ghi chú thêm (tùy chọn)"
+                      className="px-3 py-1.5 text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl"
+                    />
                   </div>
-
-                  {/* Division Selection in Create Form */}
-                  <div className="space-y-2 pt-1 border-t border-indigo-100/80 dark:border-indigo-900/40">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                        <Layers className="w-3.5 h-3.5 text-indigo-500" />
-                        <span>Chọn các Phân chia (Division) muốn lưu vào bản này:</span>
-                        <span className="text-indigo-600 dark:text-indigo-400 font-bold">
-                          ({selectedDivisionsToCreate.length}/{eligibleDivisions.filter((d) => d.canSelect).length})
-                        </span>
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={handleSelectAllDivisionsToCreate}
-                          className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
-                        >
-                          Chọn tất cả
-                        </button>
-                        <span className="text-slate-300 dark:text-slate-700">•</span>
-                        <button
-                          type="button"
-                          onClick={handleDeselectAllDivisionsToCreate}
-                          className="text-[11px] font-bold text-slate-500 hover:underline"
-                        >
-                          Bỏ chọn
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
-                      {eligibleDivisions.map((div) => {
-                        const isSelected = selectedDivisionsToCreate.includes(div.id);
-                        return (
-                          <div
-                            key={div.id}
-                            onClick={() => {
-                              if (div.canSelect) {
-                                handleToggleDivisionCreate(div.id);
-                              }
-                            }}
-                            className={`p-2.5 rounded-xl border text-xs transition flex items-center justify-between gap-2 ${
-                              !div.canSelect
-                                ? 'opacity-40 cursor-not-allowed bg-slate-100 dark:bg-slate-900 border-slate-200 dark:border-slate-800'
-                                : isSelected
-                                ? 'border-indigo-600 bg-white dark:bg-[#111927] text-indigo-950 dark:text-indigo-100 shadow-2xs cursor-pointer'
-                                : 'border-slate-200/80 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white/70 dark:bg-slate-900/60 cursor-pointer text-slate-700 dark:text-slate-300'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2 min-w-0 flex-1">
-                              <span
-                                className="w-2.5 h-2.5 rounded-full shrink-0"
-                                style={{ backgroundColor: div.color || '#6366F1' }}
-                              />
-                              <div className="min-w-0 flex-1 truncate">
-                                <div className="font-bold truncate">{div.name}</div>
-                                <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                                  {div.clustersCount} cụm • {div.tasksCount} việc
-                                </div>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              {div.isPrivate ? (
-                                <span className="text-[9.5px] px-1.5 py-0.5 rounded font-semibold bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                                  Riêng tư
-                                </span>
-                              ) : (
-                                <span className="text-[9.5px] px-1.5 py-0.5 rounded font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                                  Chung
-                                </span>
-                              )}
-                              {isSelected ? (
-                                <CheckSquare className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                              ) : (
-                                <Square className={`w-4 h-4 ${!div.canSelect ? 'text-slate-300' : 'text-slate-400'}`} />
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between pt-1">
-                    <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                      Bản sao lưu sẽ được lưu riêng cho phòng &quot;{activeWorkspace?.name}&quot;.
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setIsCreating(false)}
-                        className="px-3 py-1.5 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-slate-800 rounded-xl transition"
-                      >
-                        Hủy
-                      </button>
-                      <button
-                        type="submit"
-                        disabled={selectedDivisionsToCreate.length === 0}
-                        className="px-4 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 rounded-xl transition shadow-xs"
-                      >
-                        Lưu bản sao lưu ({selectedDivisionsToCreate.length} phân chia)
-                      </button>
-                    </div>
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsCreatingManualPoint(false)}
+                      className="px-3 py-1 text-xs text-slate-600 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-xl"
+                    >
+                      Hủy
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-3.5 py-1 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl"
+                    >
+                      Xác nhận lưu
+                    </button>
                   </div>
                 </form>
               )}
 
-              {/* Snapshots list */}
-              {filteredSnapshots.length === 0 ? (
-                <div className="py-12 text-center text-slate-400 dark:text-slate-500 text-xs">
-                  <Database className="w-10 h-10 mx-auto mb-2 opacity-40" />
-                  <p>Không có bản sao lưu nào trong phòng này phù hợp bộ lọc.</p>
-                  <p className="text-[11px] mt-1">Mỗi phòng sẽ lưu giữ các bản sao lưu riêng biệt của chính phòng đó.</p>
+              {/* List of Rollback Checkpoints */}
+              {filteredRestorePoints.length === 0 ? (
+                <div className="text-center py-12 px-4 border border-dashed border-slate-200 dark:border-slate-800 rounded-3xl bg-slate-50/50 dark:bg-slate-900/30">
+                  <div className="w-12 h-12 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-500 mx-auto flex items-center justify-center mb-3">
+                    <History className="w-6 h-6" />
+                  </div>
+                  <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                    Chưa có điểm Rollback nào được ghi nhận
+                  </h4>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto mt-1 leading-relaxed">
+                    Hệ thống sẽ <strong>tự động tạo 1 điểm Rollback</strong> mỗi khi bạn xóa công việc, xóa phân chia, di chuyển hàng loạt, hoặc bạn có thể bấm nút <strong>&quot;Lưu điểm ngay&quot;</strong> ở góc trên bất cứ lúc nào!
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setIsCreatingManualPoint(true)}
+                    className="mt-4 inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Tạo điểm Rollback đầu tiên ngay</span>
+                  </button>
                 </div>
               ) : (
                 <div className="space-y-2.5">
-                  {filteredSnapshots.map((snap) => {
-                    const isAuto = snap.description?.includes('Tự động') || snap.auto_generated;
-                    const isSafety = snap.name?.includes('Trước khi khôi phục') || snap.description?.includes('bảo vệ');
-                    const isMySnapshot = snap.created_by === currentUser?.id;
+                  {filteredRestorePoints.map((rp) => {
+                    const badge = getActionBadge(rp.action_type);
                     return (
                       <div
-                        key={snap.id}
-                        className="p-3.5 rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-[#111927] hover:border-slate-300 dark:hover:border-slate-700 transition flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs"
+                        key={rp.id}
+                        className="p-3.5 rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-[#111827] hover:border-indigo-300 dark:hover:border-indigo-800/80 transition-all shadow-xs space-y-2.5"
                       >
-                        <div className="space-y-1.5 min-w-0 flex-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
-                              {snap.name}
-                            </span>
-                            {isAuto ? (
-                              <span className="text-[9.5px] px-2 py-0.5 rounded-full font-semibold bg-sky-50 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300 border border-sky-200 dark:border-sky-800">
-                                Tự động
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${badge.color}`}
+                              >
+                                {badge.label}
                               </span>
-                            ) : (
-                              <span className="text-[9.5px] px-2 py-0.5 rounded-full font-semibold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                                Thủ công
+                              <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                                {rp.name}
                               </span>
-                            )}
-                          </div>
-                          {snap.description && (
-                            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                              {snap.description}
-                            </p>
-                          )}
-                          <div className="flex items-center gap-3 text-[10.5px] text-slate-400 dark:text-slate-500 flex-wrap">
-                            <span className="flex items-center gap-1">
-                              <Clock className="w-3 h-3" />
-                              {new Date(snap.created_at).toLocaleString('vi-VN')}
-                            </span>
-                            <span>Người tạo: {snap.created_by_name || 'Hệ thống'}</span>
-                            {snap.stats && (
-                              <span className="text-indigo-500 dark:text-indigo-400 font-medium">
-                                {snap.stats.divisions_count} phân chia • {snap.stats.clusters_count} cụm • {snap.stats.tasks_count} việc
-                              </span>
-                            )}
-                          </div>
-                          {/* Saved division names badges */}
-                          {snap.saved_division_names && snap.saved_division_names.length > 0 && (
-                            <div className="flex items-center gap-1 flex-wrap pt-0.5">
-                              <span className="text-[10px] text-slate-400">Đã lưu:</span>
-                              {snap.saved_division_names.map((name, idx) => (
-                                <span
-                                  key={idx}
-                                  className="text-[10px] px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-medium"
-                                >
-                                  {name}
-                                </span>
-                              ))}
                             </div>
-                          )}
+
+                            <div className="flex items-center gap-3 text-[11px] text-slate-500 dark:text-slate-400 flex-wrap">
+                              <span className="flex items-center gap-1">
+                                <Clock className="w-3 h-3 text-slate-400" />
+                                <strong className="text-slate-700 dark:text-slate-300">
+                                  {formatRelativeTime(rp.created_at)}
+                                </strong>
+                                ({new Date(rp.created_at).toLocaleTimeString('vi-VN')} {new Date(rp.created_at).toLocaleDateString('vi-VN')})
+                              </span>
+                              <span>
+                                Bởi: <strong className="text-slate-700 dark:text-slate-300">{rp.created_by_name || 'Hệ thống'}</strong>
+                              </span>
+                              {rp.stats && (
+                                <span className="text-indigo-600 dark:text-indigo-400 font-medium">
+                                  • {rp.stats.tasks_count} việc, {rp.stats.clusters_count} cụm, {rp.stats.divisions_count} phân chia
+                                </span>
+                              )}
+                            </div>
+
+                            {rp.description && (
+                              <p className="text-xs text-slate-600 dark:text-slate-400 italic">
+                                {rp.description}
+                              </p>
+                            )}
+                          </div>
+
+                          {/* Action Buttons */}
+                          <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                            {/* Full Rollback */}
+                            <button
+                              type="button"
+                              onClick={() => setPointToRollbackFull(rp)}
+                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition shadow-xs"
+                              title="Khôi phục toàn bộ dữ liệu về trạng thái này"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                              <span>Rollback ngay</span>
+                            </button>
+
+                            {/* Selective Rollback */}
+                            <button
+                              type="button"
+                              onClick={() => handleOpenSelectiveRollback(rp)}
+                              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition"
+                              title="Chỉ khôi phục một số phân chia đã chọn"
+                            >
+                              <Layers className="w-3.5 h-3.5 text-indigo-500" />
+                              <span className="hidden sm:inline">Chọn phân chia</span>
+                            </button>
+
+                            {/* Delete point */}
+                            <button
+                              type="button"
+                              onClick={() => deleteRestorePoint(rp.id)}
+                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-xl transition"
+                              title="Xóa điểm hoàn tác này"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
 
-                        {/* Action buttons */}
-                        <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenRollbackModal(snap)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 border border-indigo-200 dark:border-indigo-800 rounded-xl transition shadow-2xs"
-                            title="Lựa chọn phân chia để khôi phục từ bản này"
-                          >
-                            <RotateCcw className="w-3.5 h-3.5" />
-                            <span>Khôi phục...</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => deleteSnapshot(snap.id)}
-                            className="p-1.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition"
-                            title="Xóa bản lưu này"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
+                        {/* Affected divisions info */}
+                        {rp.affected_divisions && rp.affected_divisions.length > 0 && (
+                          <div className="pt-2 border-t border-slate-100 dark:border-slate-800/80 flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[11px] font-semibold text-slate-400">Phân chia liên quan:</span>
+                            {rp.affected_divisions.map((div) => (
+                              <span
+                                key={div.id}
+                                className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200/80 dark:border-slate-700"
+                              >
+                                {div.name}
+                                {div.visibility === 'private' ? (
+                                  <Lock className="w-2.5 h-2.5 text-amber-500" />
+                                ) : (
+                                  <Globe className="w-2.5 h-2.5 text-emerald-500" />
+                                )}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -760,96 +741,234 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({ isOpen, onClose })
             </div>
           )}
 
-          {/* Shared Restore Points Tab */}
-          {activeTab === 'restore_points' && (
+          {/* TAB 2: MANUAL SNAPSHOTS */}
+          {activeTab === 'snapshots' && (
             <div className="space-y-4">
-              <div className="p-3.5 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200/80 dark:border-indigo-800/60 flex items-start gap-2.5 text-xs text-indigo-950 dark:text-indigo-200">
-                <Info className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
-                <div className="space-y-1">
-                  <span className="font-bold">Lịch sử hoàn tác chung cho các thành viên phòng &quot;{activeWorkspace?.name}&quot;:</span>
-                  <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
-                    Mỗi khi ai đó trong phòng thực hiện Rollback, hệ thống sẽ tự động sao lưu lại trạng thái trước đó thành một <strong>Điểm hoàn tác chung (Restore Point)</strong> tại đây. Bất kỳ thành viên nào cũng có thể bấm <strong>&quot;Hoàn tác&quot;</strong> để đưa phân chia trở về trạng thái cũ nếu không thích bản rollback đó.
-                  </p>
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 bg-slate-50 dark:bg-slate-900/50 p-3 rounded-2xl border border-slate-200/80 dark:border-slate-800">
+                <div className="relative flex-1">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={snapshotSearch}
+                    onChange={(e) => setSnapshotSearch(e.target.value)}
+                    placeholder="Tìm kiếm bản sao lưu..."
+                    className="w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <select
+                    value={snapshotTypeFilter}
+                    onChange={(e) => setSnapshotTypeFilter(e.target.value as any)}
+                    className="px-2.5 py-1.5 text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-medium"
+                  >
+                    <option value="all">Tất cả bản sao lưu</option>
+                    <option value="manual">Chỉ bản thủ công</option>
+                    <option value="auto">Chỉ bản tự động</option>
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedDivisionsToCreate(eligibleDivisions.filter((d) => d.canSelect).map((d) => d.id));
+                      setIsCreatingSnapshot((v) => !v);
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition shadow-xs"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Tạo bản sao lưu</span>
+                  </button>
                 </div>
               </div>
 
-              {restorePoints.length === 0 ? (
-                <div className="py-12 text-center text-slate-400 dark:text-slate-500 text-xs">
-                  <Undo2 className="w-10 h-10 mx-auto mb-2 opacity-40" />
-                  <p>Chưa có điểm hoàn tác nào trong phòng này.</p>
-                  <p className="text-[11px] mt-1">Khi bất kỳ thành viên nào rollback phân chia, điểm hoàn tác sẽ tự động xuất hiện tại đây.</p>
+              {/* Snapshot Creation Form */}
+              {isCreatingSnapshot && (
+                <form
+                  onSubmit={handleCreateSnapshot}
+                  className="p-4 rounded-2xl border border-indigo-200 dark:border-indigo-900 bg-indigo-50/50 dark:bg-indigo-950/30 space-y-3 animate-in fade-in"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
+                      <History className="w-3.5 h-3.5 text-indigo-500" />
+                      Tạo bản sao lưu mới cho phòng làm việc
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIsCreatingSnapshot(false)}
+                      className="text-slate-400 hover:text-slate-600"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      value={newSnapshotName}
+                      onChange={(e) => setNewSnapshotName(e.target.value)}
+                      placeholder="Tên bản sao lưu (VD: Phiên bản hoàn thành sprint 1)"
+                      className="px-3 py-1.5 text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl"
+                      autoFocus
+                    />
+                    <input
+                      type="text"
+                      value={newSnapshotDesc}
+                      onChange={(e) => setNewSnapshotDesc(e.target.value)}
+                      placeholder="Ghi chú chi tiết (tùy chọn)"
+                      className="px-3 py-1.5 text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl"
+                    />
+                  </div>
+
+                  {/* Division multi-select */}
+                  <div className="pt-2 border-t border-indigo-200/70 dark:border-indigo-900/60">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[11px] font-bold text-indigo-900 dark:text-indigo-200">
+                        Chọn phân chia lưu kèm ({selectedDivisionsToCreate.length}/{eligibleDivisions.length}):
+                      </span>
+                      <div className="flex items-center gap-2 text-[11px]">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedDivisionsToCreate(eligibleDivisions.filter((d) => d.canSelect).map((d) => d.id))}
+                          className="text-indigo-600 hover:underline font-bold"
+                        >
+                          Chọn tất cả
+                        </button>
+                        <span>•</span>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedDivisionsToCreate([])}
+                          className="text-slate-500 hover:underline"
+                        >
+                          Bỏ chọn
+                        </button>
+                      </div>
+                    </div>
+
+                    {eligibleDivisions.length === 0 ? (
+                      <div className="p-3 text-center bg-white/70 dark:bg-slate-900/60 rounded-xl border border-dashed border-amber-300 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-400">
+                        Chưa có Phân chia (Division) nào trong phòng này. Bạn cần tạo ít nhất 1 Phân chia trước khi tạo bản sao lưu.
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                        {eligibleDivisions.map((div) => {
+                          const isSelected = selectedDivisionsToCreate.includes(div.id);
+                          return (
+                            <div
+                              key={div.id}
+                              onClick={() => {
+                                setSelectedDivisionsToCreate((prev) =>
+                                  prev.includes(div.id) ? prev.filter((id) => id !== div.id) : [...prev, div.id]
+                                );
+                              }}
+                              className={`flex items-center justify-between p-2.5 rounded-xl border text-xs cursor-pointer transition ${
+                                isSelected
+                                  ? 'border-indigo-500 bg-white dark:bg-slate-800 text-indigo-950 dark:text-indigo-200 ring-1 ring-indigo-500/20 shadow-xs'
+                                  : 'border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50 text-slate-500'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 truncate flex-1 min-w-0">
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => {}}
+                                  className="rounded text-indigo-600"
+                                />
+                                <span className="font-semibold truncate">{div.name}</span>
+                                {div.isPrivate ? (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded-md font-semibold bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 shrink-0">
+                                    Riêng tư của tôi
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded-md font-semibold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 shrink-0">
+                                    Chung (Public)
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-[10px] text-slate-400 shrink-0 ml-2">
+                                {div.tasksCount} việc
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsCreatingSnapshot(false)}
+                      className="px-3 py-1 text-xs text-slate-600 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-xl"
+                    >
+                      Hủy
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={!newSnapshotName.trim() || selectedDivisionsToCreate.length === 0}
+                      className="px-3.5 py-1 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-xl shadow-xs"
+                    >
+                      Lưu bản sao lưu
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {/* Snapshots list */}
+              {filteredSnapshots.length === 0 ? (
+                <div className="text-center py-10 border border-dashed border-slate-200 dark:border-slate-800 rounded-3xl">
+                  <p className="text-xs text-slate-400">Chưa có bản sao lưu thủ công nào.</p>
                 </div>
               ) : (
-                <div className="space-y-3">
-                  {restorePoints.map((rp) => (
+                <div className="space-y-2.5">
+                  {filteredSnapshots.map((snap) => (
                     <div
-                      key={rp.id}
-                      className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111927] hover:border-slate-300 dark:hover:border-slate-700 transition space-y-2.5 shadow-2xs"
+                      key={snap.id}
+                      className="p-3.5 rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-[#111827] space-y-2"
                     >
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
                         <div>
                           <div className="flex items-center gap-2">
                             <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
-                              {rp.name}
+                              {snap.name}
                             </span>
-                            <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-50 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                              Restore Point
-                            </span>
+                            {snap.auto_generated && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                                Tự động
+                              </span>
+                            )}
                           </div>
-                          <div className="flex items-center gap-3 text-[11px] text-slate-400 dark:text-slate-500 mt-1 flex-wrap">
-                            <span className="flex items-center gap-1">
-                              <Clock className="w-3 h-3" />
-                              {new Date(rp.created_at).toLocaleString('vi-VN')}
-                            </span>
-                            <span>Thực hiện bởi: <strong className="text-slate-700 dark:text-slate-300">{rp.created_by_name}</strong></span>
-                            {rp.description && <span>• {rp.description}</span>}
+                          <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                            <span>{new Date(snap.created_at).toLocaleString('vi-VN')}</span>
+                            <span>• Bởi: {snap.created_by_name}</span>
+                            <span>• {snap.stats.divisions_count} phân chia, {snap.stats.tasks_count} việc</span>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                        <div className="flex items-center gap-2">
                           <button
                             type="button"
-                            onClick={() => setRestorePointToRevert(rp)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition shadow-xs"
-                            title="Đưa dữ liệu trở lại trạng thái trước khi rollback"
+                            onClick={() => setPointToRollbackFull(snap)}
+                            className="flex items-center gap-1 px-3 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition"
                           >
-                            <Undo2 className="w-3.5 h-3.5" />
-                            <span>Hoàn tác lại (Revert)</span>
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>Rollback</span>
                           </button>
                           <button
                             type="button"
-                            onClick={() => deleteRestorePoint(rp.id)}
-                            className="p-1.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition"
-                            title="Xóa điểm hoàn tác này"
+                            onClick={() => handleOpenSelectiveRollback(snap)}
+                            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Layers className="w-3.5 h-3.5 text-indigo-500" />
+                            <span>Chọn phân chia</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteSnapshot(snap.id)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 rounded-xl transition"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       </div>
-
-                      {/* Affected divisions */}
-                      {rp.affected_divisions && rp.affected_divisions.length > 0 && (
-                        <div className="pt-2 border-t border-slate-100 dark:border-slate-800/80 flex items-center gap-1.5 flex-wrap">
-                          <span className="text-[11px] font-semibold text-slate-500">Phân chia bị thay đổi:</span>
-                          {rp.affected_divisions.map((div) => (
-                            <span
-                              key={div.id}
-                              className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200/80 dark:border-slate-700"
-                            >
-                              <span
-                                className="w-2 h-2 rounded-full"
-                                style={{ backgroundColor: '#6366F1' }}
-                              />
-                              {div.name}
-                              {div.visibility === 'private' ? (
-                                <Lock className="w-2.5 h-2.5 text-amber-500" />
-                              ) : (
-                                <Globe className="w-2.5 h-2.5 text-emerald-500" />
-                              )}
-                            </span>
-                          ))}
-                        </div>
-                      )}
                     </div>
                   ))}
                 </div>
@@ -857,25 +976,73 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({ isOpen, onClose })
             </div>
           )}
 
-          {/* Settings & Auto Snapshot Division Selection */}
+          {/* TAB 3: JSON BACKUP / RESTORE */}
+          {activeTab === 'io' && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Export Card */}
+                <div className="p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-[#111927] space-y-3">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-slate-100">
+                    <Download className="w-4 h-4 text-indigo-500" />
+                    <span>Xuất dữ liệu toàn bộ (Export JSON)</span>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                    Tải toàn bộ cơ sở dữ liệu hiện tại (bao gồm các phòng, công việc, tin nhắn, phân chia) về máy tính dưới dạng file .json để lưu trữ an toàn.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleExportJSON}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition shadow-xs"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Tải file backup JSON</span>
+                  </button>
+                </div>
+
+                {/* Import Card */}
+                <div className="p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-[#111927] space-y-3">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-slate-100">
+                    <Upload className="w-4 h-4 text-emerald-500" />
+                    <span>Nhập dữ liệu từ file JSON (Import)</span>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                    Khôi phục cơ sở dữ liệu từ file backup .json đã tải về trước đây. Trước khi ghi đè, hệ thống sẽ tự động lưu lại một điểm Rollback an toàn.
+                  </p>
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleFileSelect}
+                    accept=".json"
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 border border-emerald-200 dark:border-emerald-800 rounded-xl transition"
+                  >
+                    <Upload className="w-4 h-4" />
+                    <span>Chọn file JSON để khôi phục</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 4: SETTINGS */}
           {activeTab === 'settings' && (
             <div className="space-y-5">
-              {/* Frequency Selection */}
               <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-[#111927] space-y-3">
                 <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-slate-100">
                   <Sliders className="w-4 h-4 text-indigo-500" />
-                  <span>1. Tần suất tự động sao lưu</span>
+                  <span>Tần suất tự động chụp bản sao lưu</span>
                 </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                  Thiết lập chu kỳ chạy tự động trong nền cho phòng &quot;{activeWorkspace?.name}&quot;, lưu giữ tối đa 50 bản chụp gần nhất.
-                </p>
-
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
                   {[
-                    { id: 'daily', label: 'Hàng ngày (Mặc định)', desc: 'Tự động sao lưu mỗi 24 giờ một lần' },
-                    { id: '12h', label: 'Mỗi 12 giờ', desc: 'Sao lưu 2 lần/ngày sáng & tối' },
-                    { id: '6h', label: 'Mỗi 6 giờ', desc: 'Dành cho đội ngũ thao tác liên tục' },
-                    { id: 'manual', label: 'Chỉ thủ công', desc: 'Chỉ lưu khi bạn nhấn nút Tạo' },
+                    { id: 'daily', label: 'Hàng ngày theo Giờ Việt Nam (UTC+7)', desc: 'Tự động lưu và reset mỗi ngày theo múi giờ Việt Nam' },
+                    { id: '12h', label: 'Mỗi 12 giờ (Giờ Việt Nam)', desc: 'Tự động chụp lúc 00:00 & 12:00 trưa theo giờ Việt Nam' },
+                    { id: '6h', label: 'Mỗi 6 giờ (Giờ Việt Nam)', desc: 'Tự động chụp lúc 00:00, 06:00, 12:00, 18:00 theo giờ Việt Nam' },
+                    { id: 'hourly', label: 'Mỗi 1 giờ (Giờ Việt Nam)', desc: 'Tự động chụp đầu mỗi giờ theo giờ Việt Nam' },
+                    { id: 'manual', label: 'Chỉ thủ công', desc: 'Chỉ lưu khi bạn nhấn nút tạo điểm hoặc sao lưu' },
                   ].map((item) => (
                     <button
                       key={item.id}
@@ -909,380 +1076,228 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({ isOpen, onClose })
                   ))}
                 </div>
               </div>
+            </div>
+          )}
+        </div>
 
-              {/* Auto Division Selection */}
-              <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-[#111927] space-y-3">
+        {/* DIALOG: CONFIRM FULL ROLLBACK */}
+        {pointToRollbackFull && (
+          <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
+            <div className="w-full max-w-md bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-2xl bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-800">
+                  <RotateCcw className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                    Xác nhận Rollback (Khôi phục toàn bộ)
+                  </h4>
+                  <p className="text-xs text-slate-500">Khôi phục về: &quot;{pointToRollbackFull.name}&quot;</p>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs space-y-2">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-slate-100">
-                    <Layers className="w-4 h-4 text-indigo-500" />
-                    <span>2. Cấu hình Phân chia tự động sao lưu</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleSelectAllAutoDivisions}
-                      className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
-                    >
-                      Tích chọn tất cả (Mặc định)
-                    </button>
-                    <span className="text-slate-300 dark:text-slate-700">•</span>
-                    <button
-                      type="button"
-                      onClick={handleDeselectAllAutoDivisions}
-                      className="text-[11px] font-bold text-slate-500 hover:underline"
-                    >
-                      Bỏ chọn tất cả
-                    </button>
-                  </div>
-                </div>
-
-                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                  Mặc định hệ thống tự động tích chọn <strong>tất cả phân chia Chung</strong> và <strong>phân chia Cá nhân của bạn</strong>. Bạn có thể bỏ tích chọn bất kỳ phân chia nào bạn không thích để hệ thống loại ra khỏi bản sao lưu tự động.
-                </p>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                  {eligibleDivisions.map((div) => {
-                    const isExcluded = excludedAutoDivisionIds.includes(div.id);
-                    const isChecked = !isExcluded;
-                    return (
-                      <div
-                        key={div.id}
-                        onClick={() => {
-                          if (div.canSelect) {
-                            handleToggleAutoExcludeDivision(div.id);
-                          }
-                        }}
-                        className={`p-3 rounded-xl border text-xs transition flex items-center justify-between gap-2.5 ${
-                          !div.canSelect
-                            ? 'opacity-40 cursor-not-allowed bg-slate-100 dark:bg-slate-900 border-slate-200 dark:border-slate-800'
-                            : isChecked
-                            ? 'border-indigo-500/80 bg-indigo-50/50 dark:bg-indigo-950/30 text-indigo-950 dark:text-indigo-100 cursor-pointer shadow-2xs'
-                            : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111927] hover:border-slate-300 dark:hover:border-slate-700 text-slate-500 cursor-pointer'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                          <span
-                            className="w-2.5 h-2.5 rounded-full shrink-0"
-                            style={{ backgroundColor: div.color || '#6366F1' }}
-                          />
-                          <div className="min-w-0 flex-1 truncate">
-                            <div className="font-bold truncate text-slate-900 dark:text-slate-100">
-                              {div.name}
-                            </div>
-                            <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                              {div.clustersCount} cụm • {div.tasksCount} việc
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2 shrink-0">
-                          {div.isPrivate ? (
-                            <span className="text-[9.5px] px-1.5 py-0.5 rounded font-semibold bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                              Cá nhân
-                            </span>
-                          ) : (
-                            <span className="text-[9.5px] px-1.5 py-0.5 rounded font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                              Chung
-                            </span>
-                          )}
-                          {isChecked ? (
-                            <CheckSquare className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                          ) : (
-                            <Square className="w-4 h-4 text-slate-400" />
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                <div className="pt-2 flex items-center justify-between">
-                  <span className="text-[11px] text-slate-500">
-                    Hiện có <strong>{eligibleDivisions.filter((d) => !excludedAutoDivisionIds.includes(d.id)).length}</strong> phân chia được đưa vào sao lưu tự động.
+                  <span className="text-slate-500">Thời điểm lưu:</span>
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">
+                    {new Date(pointToRollbackFull.created_at).toLocaleString('vi-VN')}
                   </span>
-                  <button
-                    type="button"
-                    onClick={handleTriggerTestAutoSnapshot}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 border border-indigo-200 dark:border-indigo-800 rounded-xl transition shadow-2xs"
-                  >
-                    <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
-                    <span>Chạy thử sao lưu tự động ngay</span>
-                  </button>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Người thực hiện lưu:</span>
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">
+                    {pointToRollbackFull.created_by_name}
+                  </span>
+                </div>
+                <div className="pt-2 border-t border-slate-200/70 dark:border-slate-800 text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5 font-medium">
+                  <ShieldCheck className="w-4 h-4 shrink-0" />
+                  <span>Một điểm an toàn trước khi khôi phục sẽ tự động được lưu lại để bạn có thể hoàn tác lại bất cứ lúc nào.</span>
                 </div>
               </div>
-            </div>
-          )}
 
-          {/* Export / Import File Tab */}
-          {activeTab === 'io' && (
-            <div className="space-y-4">
-              <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-[#111927] space-y-2">
-                <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-slate-100">
-                  <Download className="w-4 h-4 text-indigo-500" />
-                  <span>Xuất toàn bộ dữ liệu phòng (Export Backup)</span>
-                </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                  Tải về một file <code>.json</code> chứa toàn bộ các phân chia, cụm, công việc và cấu hình của phòng &quot;{activeWorkspace?.name}&quot; để lưu trữ an toàn ngoại tuyến.
-                </p>
+              <div className="flex items-center justify-end gap-2.5 pt-2">
                 <button
                   type="button"
-                  onClick={handleExportJSON}
-                  className="mt-2 flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition shadow-xs"
+                  onClick={() => setPointToRollbackFull(null)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition"
                 >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Tải file backup phòng (.json)</span>
+                  Hủy
                 </button>
-              </div>
-
-              <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-[#111927] space-y-2">
-                <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-slate-100">
-                  <Upload className="w-4 h-4 text-indigo-500" />
-                  <span>Nhập dữ liệu từ file backup (Import)</span>
-                </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                  Khôi phục hoặc gộp dữ liệu từ một file JSON đã sao lưu trước đây. Hệ thống sẽ tự động tạo một điểm an toàn trước khi nạp.
-                </p>
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  onChange={handleFileSelect}
-                  accept=".json,application/json"
-                  className="hidden"
-                />
                 <button
                   type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="mt-2 flex items-center gap-2 px-4 py-2 text-xs font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 border border-indigo-200 dark:border-indigo-800 rounded-xl transition"
+                  onClick={handleConfirmFullRollback}
+                  className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition shadow-xs"
                 >
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>Chọn file JSON để nạp</span>
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Xác nhận Rollback ngay</span>
                 </button>
               </div>
             </div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="px-6 py-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-[#0a101d]/50 flex items-center justify-between shrink-0 text-xs">
-          <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400 text-[11px]">
-            <ShieldCheck className="w-4 h-4 text-emerald-500" />
-            <span>Phòng: {activeWorkspace?.name || 'Hiện tại'} • Điểm hoàn tác lưu riêng biệt theo phòng</span>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 rounded-xl transition"
-          >
-            Đóng
-          </button>
-        </div>
-      </div>
+        )}
 
-      {/* Confirmation & Granular Division Selection Modal for Rollback */}
-      {selectedSnapshotForRollback && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
-          <div className="w-full max-w-xl bg-white dark:bg-[#111927] border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl p-5 space-y-4 animate-in zoom-in-95">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-              <div className="flex items-center gap-2 text-indigo-600 dark:text-indigo-400">
-                <RotateCcw className="w-5 h-5" />
-                <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                  Lựa chọn chi tiết Phân chia (Division) muốn khôi phục
-                </h4>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedSnapshotForRollback(null)}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-1 text-xs text-slate-600 dark:text-slate-300">
-              <p>
-                Bản sao lưu: <strong className="text-slate-900 dark:text-slate-100">&quot;{selectedSnapshotForRollback.name}&quot;</strong>
-              </p>
-              <p className="text-[11px] text-slate-500">
-                Thời gian ghi lại: {new Date(selectedSnapshotForRollback.created_at).toLocaleString('vi-VN')} • Người tạo: {selectedSnapshotForRollback.created_by_name || 'Hệ thống'}
-              </p>
-            </div>
-
-            {/* Division Multi-Selection List */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-bold text-slate-700 dark:text-slate-300">
-                  Chọn phân chia cần rollback ({selectedDivisionIdsToRollback.length}/{availableDivisionsInSnapshot.filter((d) => d.canRollback).length}):
-                </span>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleSelectAllPermittedDivisions}
-                    className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
-                  >
-                    Chọn tất cả
-                  </button>
-                  <span className="text-slate-300 dark:text-slate-700">•</span>
-                  <button
-                    type="button"
-                    onClick={handleDeselectAllDivisions}
-                    className="text-[11px] font-bold text-slate-500 hover:underline"
-                  >
-                    Bỏ chọn
-                  </button>
+        {/* DIALOG: SELECTIVE ROLLBACK */}
+        {pointToRollbackSelective && (
+          <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
+            <div className="w-full max-w-lg bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 border border-indigo-200 dark:border-indigo-800">
+                    <Layers className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                      Rollback có chọn lọc theo Phân chia
+                    </h4>
+                    <p className="text-xs text-slate-500">
+                      Chỉ khôi phục phân chia bạn chọn, giữ nguyên các phân chia khác
+                    </p>
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setPointToRollbackSelective(null)}
+                  className="text-slate-400 hover:text-slate-600"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
 
-              {availableDivisionsInSnapshot.length === 0 ? (
-                <div className="p-4 text-center text-xs text-slate-400 border border-dashed rounded-xl">
-                  Bản sao lưu này không chứa phân chia nào.
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-slate-700 dark:text-slate-300">
+                    Chọn phân chia ({selectedDivisionIdsToRollback.length}/{divisionsInSelectiveSource.length}):
+                  </span>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSelectedDivisionIdsToRollback(
+                          divisionsInSelectiveSource.filter((d) => d.canRollback).map((d) => d.id)
+                        )
+                      }
+                      className="text-indigo-600 hover:underline font-bold"
+                    >
+                      Chọn tất cả
+                    </button>
+                    <span>•</span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDivisionIdsToRollback([])}
+                      className="text-slate-500 hover:underline"
+                    >
+                      Bỏ chọn
+                    </button>
+                  </div>
                 </div>
-              ) : (
-                <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                  {availableDivisionsInSnapshot.map((div) => {
-                    const isSelected = selectedDivisionIdsToRollback.includes(div.id);
-                    return (
-                      <div
-                        key={div.id}
-                        onClick={() => {
-                          if (div.canRollback) {
-                            handleToggleDivisionSelect(div.id);
-                          }
-                        }}
-                        className={`p-3 rounded-xl border text-xs transition flex items-start justify-between gap-3 ${
-                          !div.canRollback
-                            ? 'opacity-50 cursor-not-allowed border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/40'
-                            : isSelected
-                            ? 'border-indigo-600 bg-indigo-50/70 dark:bg-indigo-950/40 cursor-pointer shadow-xs'
-                            : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 cursor-pointer bg-white dark:bg-[#131d2e]'
-                        }`}
-                      >
-                        <div className="space-y-1.5 min-w-0 flex-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span
-                              className="w-2.5 h-2.5 rounded-full shrink-0"
-                              style={{ backgroundColor: div.color || '#6366F1' }}
+
+                {divisionsInSelectiveSource.length === 0 ? (
+                  <div className="p-3 text-center bg-slate-50 dark:bg-slate-900 rounded-xl border border-dashed border-slate-300 dark:border-slate-800 text-xs text-slate-500">
+                    Bản lưu này không chứa phân chia hợp lệ nào (Public hoặc Riêng tư của tài khoản bạn) để khôi phục.
+                  </div>
+                ) : (
+                  <div className="max-h-60 overflow-y-auto space-y-1.5 pr-1">
+                    {divisionsInSelectiveSource.map((div) => {
+                      const isSelected = selectedDivisionIdsToRollback.includes(div.id);
+                      return (
+                        <div
+                          key={div.id}
+                          onClick={() => {
+                            if (!div.canRollback) return;
+                            setSelectedDivisionIdsToRollback((prev) =>
+                              prev.includes(div.id) ? prev.filter((id) => id !== div.id) : [...prev, div.id]
+                            );
+                          }}
+                          className={`flex items-center justify-between p-2.5 rounded-xl border text-xs cursor-pointer transition ${
+                            isSelected
+                              ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/30 text-indigo-950 dark:text-indigo-200'
+                              : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300'
+                          } ${!div.canRollback ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        >
+                          <div className="flex items-center gap-2.5 truncate">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              disabled={!div.canRollback}
+                              onChange={() => {}}
+                              className="rounded text-indigo-600"
                             />
-                            <span className="font-bold text-slate-900 dark:text-slate-100 truncate">
-                              {div.name}
-                            </span>
-                            {div.isPrivate ? (
-                              <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.2 rounded font-semibold bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                                <Lock className="w-2.5 h-2.5" />
-                                Riêng tư ({div.ownerName})
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.2 rounded font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                                <Globe className="w-2.5 h-2.5" />
-                                Chung (Public)
+                            <span className="font-semibold truncate">{div.name}</span>
+                            {div.isPrivate && (
+                              <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+                                Riêng tư của tôi
                               </span>
                             )}
                           </div>
-
-                          <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
-                            <span>Bản lưu: <strong>{div.clusterCount} cụm</strong>, <strong>{div.taskCount} việc</strong></span>
-                            <span>•</span>
-                            <span>Hiện tại: {div.currentExists ? `${div.currentClustersCount} cụm, ${div.currentTasksCount} việc` : 'Đã bị xóa'}</span>
-                          </div>
-
-                          {!div.canRollback && (
-                            <p className="text-[11px] text-rose-500 font-medium">
-                              🔒 Phân chia riêng tư của người khác — Chỉ chủ sở hữu ({div.ownerName}) mới có quyền khôi phục.
-                            </p>
-                          )}
+                          <span className="text-[11px] text-slate-400 shrink-0">
+                            {div.tasksCount} việc • {div.clustersCount} cụm
+                          </span>
                         </div>
-
-                        <div className="mt-1">
-                          {isSelected ? (
-                            <CheckSquare className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-                          ) : (
-                            <Square className={`w-5 h-5 ${!div.canRollback ? 'text-slate-300 dark:text-slate-700' : 'text-slate-400'}`} />
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* Impact Notice */}
-            {hasSelectedPublicDivision && (
-              <div className="p-3 rounded-xl bg-amber-50/80 dark:bg-amber-950/40 border border-amber-200/80 dark:border-amber-800/60 text-[11px] text-amber-900 dark:text-amber-200 space-y-1">
-                <div className="font-bold flex items-center gap-1.5">
-                  <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                  <span>Lưu ý ảnh hưởng chung giữa các tài khoản trong phòng:</span>
-                </div>
-                <p>
-                  Bạn đang chọn khôi phục phân chia <strong>Chung (Public)</strong>. Thao tác này sẽ cập nhật dữ liệu cho tất cả các tài khoản trong phòng này. Hệ thống sẽ tự động tạo một <strong>Điểm hoàn tác chung (Restore Point)</strong> để các thành viên khác có thể hoàn tác lại bất kỳ lúc nào nếu không đồng ý.
-                </p>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-            )}
 
-            <div className="p-3 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200/80 dark:border-indigo-800/50 text-[11px] text-indigo-900 dark:text-indigo-200">
-              🛡️ <strong>Chỉ rollback các phân chia được tích chọn</strong>. Tất cả các phân chia khác của bạn và của mọi người giữ nguyên vẹn 100%.
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <button
-                type="button"
-                onClick={() => setSelectedSnapshotForRollback(null)}
-                className="px-3.5 py-1.5 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition"
-              >
-                Hủy bỏ
-              </button>
-              <button
-                type="button"
-                disabled={selectedDivisionIdsToRollback.length === 0}
-                onClick={handleExecuteRollbackDivision}
-                className="px-4 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 rounded-xl transition shadow-xs"
-              >
-                Khôi phục {selectedDivisionIdsToRollback.length} phân chia đã chọn
-              </button>
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setPointToRollbackSelective(null)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmSelectiveRollback}
+                  disabled={selectedDivisionIdsToRollback.length === 0}
+                  className="px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-xl shadow-xs"
+                >
+                  Khôi phục các phân chia đã chọn
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Confirmation Dialog for Reverting a Shared Restore Point */}
-      {restorePointToRevert && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
-          <div className="w-full max-w-md bg-white dark:bg-[#111927] border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl p-5 space-y-4 animate-in zoom-in-95">
-            <div className="flex items-center gap-2 text-indigo-600 dark:text-indigo-400">
-              <Undo2 className="w-5 h-5" />
-              <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                Xác nhận Hoàn tác lại (Revert)
-              </h4>
-            </div>
-
-            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-              Bạn có chắc muốn hoàn tác lại trạng thái trước khi rollback không?
-              <br />
-              Điểm hoàn tác: <strong className="text-slate-900 dark:text-slate-100">&quot;{restorePointToRevert.name}&quot;</strong>
-              <br />
-              <span className="text-[11px] text-slate-500">
-                Được tạo lúc {new Date(restorePointToRevert.created_at).toLocaleString('vi-VN')} khi {restorePointToRevert.created_by_name} thực hiện rollback.
-              </span>
-            </p>
-
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <button
-                type="button"
-                onClick={() => setRestorePointToRevert(null)}
-                className="px-3.5 py-1.5 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition"
-              >
-                Hủy bỏ
-              </button>
-              <button
-                type="button"
-                onClick={() => handleExecuteRevert(restorePointToRevert)}
-                className="px-4 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition shadow-xs"
-              >
-                Xác nhận hoàn tác
-              </button>
+        {/* DIALOG: CLEAR ALL RESTORE POINTS */}
+        {isClearingAllPoints && (
+          <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
+            <div className="w-full max-w-sm bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-2xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 border border-rose-200 dark:border-rose-800">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                    Dọn sạch điểm Rollback
+                  </h4>
+                  <p className="text-xs text-slate-500">Xóa toàn bộ {allRestorePoints.length} điểm hoàn tác cũ?</p>
+                </div>
+              </div>
+              <p className="text-xs text-slate-600 dark:text-slate-400">
+                Thao tác này sẽ giải phóng bộ nhớ lưu trữ các điểm checkpoint cũ. Dữ liệu công việc hiện tại sẽ không bị ảnh hưởng.
+              </p>
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsClearingAllPoints(false)}
+                  className="px-3.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmClearAllPoints}
+                  className="px-3.5 py-1.5 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl"
+                >
+                  Xác nhận xóa hết
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };
