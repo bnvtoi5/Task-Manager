@@ -23,7 +23,12 @@ import {
   ArrowRight,
   ShieldCheck,
   CheckCircle2,
-  Clock
+  Clock,
+  Plus,
+  FolderPlus,
+  Tag,
+  Layers,
+  MessageCircle,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { FileAttachment, Task, UserProfile } from '../../types';
@@ -46,14 +51,27 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose }) => {
     stagedTaskForChat,
     setStagedTaskForChat,
     locateTaskInWorkspace,
+    activeChatGroupId,
+    setActiveChatGroupId,
+    createChatGroup,
+    deleteChatGroup,
   } = useApp();
 
-  // Tab: 'room' (Phòng làm việc) vs 'direct' (Tin nhắn riêng 1-1)
-  const [chatTab, setChatTab] = useState<'room' | 'direct'>('room');
+  // Tab: 'room' (Phòng làm việc) vs 'groups' (Nhóm & Chủ đề) vs 'direct' (Tin nhắn riêng 1-1)
+  const [chatTab, setChatTab] = useState<'room' | 'groups' | 'direct'>('room');
   // Selected user for direct 1-1 chat
   const [activeDirectUserId, setActiveDirectUserId] = useState<string | null>(null);
   // Search query for contacts in direct messages
   const [contactSearchQuery, setContactSearchQuery] = useState('');
+
+  // Groups & Category Management state
+  const [selectedGroupCategory, setSelectedGroupCategory] = useState<string>('all');
+  const [groupSearchQuery, setGroupSearchQuery] = useState('');
+  const [isCreatingGroup, setIsCreatingGroup] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [newGroupCategory, setNewGroupCategory] = useState('Hạng mục chung');
+  const [newGroupDesc, setNewGroupDesc] = useState('');
+  const [newGroupColor, setNewGroupColor] = useState('#6366f1');
 
   const [input, setInput] = useState('');
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -71,11 +89,10 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose }) => {
     if (stagedTaskForChat) {
       setSelectedTaskId(stagedTaskForChat.id);
       // Switch to room or ensure task is ready
-      if (chatTab !== 'room' && activeDirectUserId) {
+      if (chatTab === 'direct' && activeDirectUserId) {
         // verify if target user is in same workspace
         const isInRoom = activeWorkspace?.members?.includes(activeDirectUserId);
         if (!isInRoom) {
-          // default back to room
           setChatTab('room');
         }
       }
@@ -105,11 +122,31 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose }) => {
     return db.users.find((u) => u.id === activeDirectUserId) || null;
   }, [activeDirectUserId, db.users]);
 
-  // Messages for room
+  // Groups in active workspace
+  const workspaceChatGroups = useMemo(() => {
+    if (!activeWorkspace) return [];
+    return (db.chat_groups || []).filter(
+      (g) => g.workspace_id === activeWorkspace.id || !g.workspace_id
+    );
+  }, [activeWorkspace, db.chat_groups]);
+
+  // Active group
+  const activeChatGroup = useMemo(() => {
+    if (!activeChatGroupId) return null;
+    return (db.chat_groups || []).find((g) => g.id === activeChatGroupId) || null;
+  }, [activeChatGroupId, db.chat_groups]);
+
+  // Messages for active group
+  const groupMessages = useMemo(() => {
+    if (!activeChatGroupId) return [];
+    return db.messages.filter((m) => m.group_id === activeChatGroupId);
+  }, [activeChatGroupId, db.messages]);
+
+  // Messages for room (general workspace messages without group or receiver)
   const roomMessages = useMemo(() => {
     if (!activeWorkspace) return [];
     return db.messages.filter(
-      (m) => m.workspace_id === activeWorkspace.id && !m.receiver_id
+      (m) => m.workspace_id === activeWorkspace.id && !m.receiver_id && !m.group_id
     );
   }, [activeWorkspace, db.messages]);
 
@@ -124,7 +161,12 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose }) => {
   }, [currentUser, activeDirectUserId, db.messages]);
 
   // Displayed messages depending on current view
-  const currentMessages = chatTab === 'room' ? roomMessages : directMessages;
+  const currentMessages =
+    chatTab === 'room'
+      ? roomMessages
+      : chatTab === 'groups'
+      ? groupMessages
+      : directMessages;
 
   // Available tasks in active workspace for #mention
   const workspaceTasks = useMemo(() => {
@@ -205,8 +247,9 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose }) => {
     }
 
     const receiverId = chatTab === 'direct' ? activeDirectUserId : null;
+    const groupId = chatTab === 'groups' ? activeChatGroupId : null;
 
-    sendMessage(input, taskIdToSend, attachedFiles, receiverId);
+    sendMessage(input, taskIdToSend, attachedFiles, receiverId, groupId);
     setInput('');
     setSelectedTaskId(null);
     setStagedTaskForChat(null);
@@ -294,22 +337,38 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose }) => {
             </button>
           </div>
 
-          {/* Main Mode Tabs: Phòng làm việc vs Nhắn tin riêng */}
-          <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-200/80 dark:bg-[#0a0f1d] rounded-xl text-xs font-semibold">
+          {/* Main Mode Tabs: Phòng làm việc vs Nhóm & Chủ đề vs Nhắn tin riêng */}
+          <div className="grid grid-cols-3 gap-1 p-1 bg-slate-200/80 dark:bg-[#0a0f1d] rounded-xl text-xs font-semibold">
             <button
               type="button"
               onClick={() => {
                 setChatTab('room');
                 setSelectedTaskId(null);
               }}
-              className={`flex items-center justify-center gap-2 py-2 rounded-lg transition cursor-pointer ${
+              className={`flex items-center justify-center gap-1.5 py-2 rounded-lg transition cursor-pointer ${
                 chatTab === 'room'
                   ? 'bg-white dark:bg-indigo-600 text-slate-900 dark:text-white shadow-xs'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
               }`}
             >
               <Users className="w-3.5 h-3.5" />
-              <span>Kênh Phòng ({workspaceMembers.length})</span>
+              <span className="truncate">Phòng ({workspaceMembers.length})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setChatTab('groups');
+                setSelectedTaskId(null);
+              }}
+              className={`flex items-center justify-center gap-1.5 py-2 rounded-lg transition cursor-pointer ${
+                chatTab === 'groups'
+                  ? 'bg-white dark:bg-indigo-600 text-slate-900 dark:text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+              }`}
+            >
+              <Hash className="w-3.5 h-3.5" />
+              <span className="truncate">Nhóm ({workspaceChatGroups.length})</span>
             </button>
 
             <button
@@ -318,16 +377,16 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose }) => {
                 setChatTab('direct');
                 setSelectedTaskId(null);
               }}
-              className={`flex items-center justify-center gap-2 py-2 rounded-lg transition cursor-pointer ${
+              className={`flex items-center justify-center gap-1.5 py-2 rounded-lg transition cursor-pointer ${
                 chatTab === 'direct'
                   ? 'bg-white dark:bg-indigo-600 text-slate-900 dark:text-white shadow-xs'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
               }`}
             >
               <User className="w-3.5 h-3.5" />
-              <span>Nhắn riêng (1-1)</span>
+              <span className="truncate">Nhắn 1-1</span>
               {activeDirectUser && (
-                <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
               )}
             </button>
           </div>
@@ -420,8 +479,262 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose }) => {
               )}
             </div>
           </div>
+        ) : chatTab === 'groups' && !activeChatGroupId ? (
+          /* Groups List & Category Management */
+          <div className="flex-1 overflow-y-auto flex flex-col bg-slate-50/50 dark:bg-[#090e1a]">
+            {/* Search & Add Group Button */}
+            <div className="p-3 border-b border-slate-200 dark:border-slate-800 space-y-2">
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={groupSearchQuery}
+                    onChange={(e) => setGroupSearchQuery(e.target.value)}
+                    placeholder="Tìm nhóm chat, chủ đề thảo luận..."
+                    className="w-full pl-8 pr-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#111827] text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-indigo-500/30"
+                  />
+                </div>
+                {!isCreatingGroup && (
+                  <button
+                    type="button"
+                    onClick={() => setIsCreatingGroup(true)}
+                    className="p-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition shadow-xs flex items-center gap-1 shrink-0"
+                    title="Tạo nhóm chat mới"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span className="hidden sm:inline">Tạo nhóm</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Category Filter Chips */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px] no-scrollbar">
+                {[
+                  { id: 'all', label: 'Tất cả' },
+                  { id: 'Hạng mục chung', label: 'Chung' },
+                  { id: 'Khẩn cấp & Sự cố', label: 'Khẩn cấp' },
+                  { id: 'Kế hoạch tuần', label: 'Kế hoạch' },
+                  { id: 'Kỹ thuật & Bug', label: 'Kỹ thuật' },
+                  { id: 'Thiết kế UI/UX', label: 'Thiết kế' },
+                  { id: 'Bàn giao & Nghiệm thu', label: 'Bàn giao' },
+                ].map((cat) => (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => setSelectedGroupCategory(cat.id)}
+                    className={`px-2.5 py-1 rounded-lg shrink-0 font-medium transition cursor-pointer ${
+                      selectedGroupCategory === cat.id
+                        ? 'bg-indigo-600 text-white font-bold'
+                        : 'bg-slate-200/60 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    {cat.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Create Group Form */}
+            {isCreatingGroup && (
+              <div className="p-3.5 m-2.5 rounded-2xl border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50/40 dark:bg-indigo-950/20 space-y-2.5 animate-in fade-in">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-indigo-950 dark:text-indigo-200 flex items-center gap-1.5">
+                    <FolderPlus className="w-4 h-4 text-indigo-500" />
+                    <span>Tạo nhóm trò chuyện theo chủ đề</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsCreatingGroup(false)}
+                    className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 uppercase">
+                    Tên nhóm chat:
+                  </label>
+                  <input
+                    type="text"
+                    value={newGroupName}
+                    onChange={(e) => setNewGroupName(e.target.value)}
+                    placeholder="VD: Họp giao ban, Bug khẩn cấp, Ý tưởng v2..."
+                    className="w-full mt-1 px-3 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 uppercase">
+                      Hạng mục phân loại:
+                    </label>
+                    <select
+                      value={newGroupCategory}
+                      onChange={(e) => setNewGroupCategory(e.target.value)}
+                      className="w-full mt-1 px-2.5 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none"
+                    >
+                      <option value="Hạng mục chung">Hạng mục chung</option>
+                      <option value="Khẩn cấp & Sự cố">Khẩn cấp & Sự cố</option>
+                      <option value="Kế hoạch tuần">Kế hoạch tuần</option>
+                      <option value="Kỹ thuật & Bug">Kỹ thuật & Bug</option>
+                      <option value="Thiết kế UI/UX">Thiết kế UI/UX</option>
+                      <option value="Bàn giao & Nghiệm thu">Bàn giao & Nghiệm thu</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 uppercase">
+                      Màu đại diện:
+                    </label>
+                    <div className="flex items-center gap-1.5 mt-1.5">
+                      {['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'].map((col) => (
+                        <button
+                          key={col}
+                          type="button"
+                          onClick={() => setNewGroupColor(col)}
+                          className={`w-5 h-5 rounded-full transition ${
+                            newGroupColor === col ? 'ring-2 ring-offset-2 ring-indigo-500 scale-110' : 'opacity-80'
+                          }`}
+                          style={{ backgroundColor: col }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <input
+                    type="text"
+                    value={newGroupDesc}
+                    onChange={(e) => setNewGroupDesc(e.target.value)}
+                    placeholder="Mô tả mục đích nhóm (tùy chọn)..."
+                    className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setIsCreatingGroup(false)}
+                    className="px-3 py-1 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-slate-800 rounded-lg transition"
+                  >
+                    Hủy
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!newGroupName.trim()) return;
+                      createChatGroup(
+                        newGroupName.trim(),
+                        newGroupCategory,
+                        newGroupDesc.trim() || undefined,
+                        newGroupColor
+                      );
+                      setNewGroupName('');
+                      setNewGroupDesc('');
+                      setIsCreatingGroup(false);
+                    }}
+                    className="px-3.5 py-1 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition"
+                  >
+                    Tạo nhóm ngay
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Groups list */}
+            <div className="flex-1 p-2 space-y-1.5 overflow-y-auto">
+              {workspaceChatGroups
+                .filter((g) => {
+                  if (selectedGroupCategory !== 'all' && g.category !== selectedGroupCategory) {
+                    return false;
+                  }
+                  if (groupSearchQuery.trim()) {
+                    const q = groupSearchQuery.toLowerCase();
+                    return (
+                      g.name.toLowerCase().includes(q) ||
+                      (g.description && g.description.toLowerCase().includes(q)) ||
+                      (g.category && g.category.toLowerCase().includes(q))
+                    );
+                  }
+                  return true;
+                })
+                .map((g) => {
+                  const msgsInGroup = db.messages.filter((m) => m.group_id === g.id);
+                  const lastMsg = msgsInGroup[msgsInGroup.length - 1];
+
+                  return (
+                    <div
+                      key={g.id}
+                      onClick={() => setActiveChatGroupId(g.id)}
+                      className="w-full flex items-center justify-between p-3 rounded-2xl bg-white dark:bg-[#111927] hover:bg-indigo-50/40 dark:hover:bg-slate-800/70 border border-slate-200/90 dark:border-slate-800 transition text-left cursor-pointer group shadow-2xs"
+                    >
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <div
+                          className="w-9 h-9 rounded-xl flex items-center justify-center text-white font-bold text-xs shrink-0 shadow-xs"
+                          style={{ backgroundColor: g.color || '#6366f1' }}
+                        >
+                          <Hash className="w-5 h-5" />
+                        </div>
+
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-xs text-slate-900 dark:text-slate-100 truncate group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">
+                              {g.name}
+                            </span>
+                            <span className="text-[9.5px] px-1.5 py-0.2 rounded-md font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shrink-0">
+                              {g.category || 'Chung'}
+                            </span>
+                          </div>
+
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                            {lastMsg ? (
+                              <span>
+                                {lastMsg.sender_id === currentUser?.id ? 'Bạn: ' : ''}
+                                {lastMsg.content || (lastMsg.attachments?.length ? 'Đã gửi tệp' : 'Đã gắn task')}
+                              </span>
+                            ) : (
+                              <span>{g.description || 'Chưa có tin nhắn nào trong nhóm'}</span>
+                            )}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0 ml-2">
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                          {msgsInGroup.length} tin
+                        </span>
+                        <ArrowRight className="w-4 h-4 text-slate-300 dark:text-slate-600 opacity-0 group-hover:opacity-100 transition" />
+                      </div>
+                    </div>
+                  );
+                })}
+
+              {workspaceChatGroups.length === 0 && !isCreatingGroup && (
+                <div className="p-8 text-center text-slate-400 text-xs space-y-2">
+                  <Hash className="w-8 h-8 mx-auto opacity-40 text-indigo-500" />
+                  <p className="font-semibold text-slate-700 dark:text-slate-300">
+                    Chưa có nhóm thảo luận theo chủ đề nào
+                  </p>
+                  <p className="text-[11px] max-w-xs mx-auto text-slate-400">
+                    Phân chia các kênh chat thành từng hạng mục như Họp, Khẩn cấp, Nghiệm thu để nhóm làm việc hiệu quả hơn.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setIsCreatingGroup(true)}
+                    className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Tạo nhóm chat đầu tiên</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
         ) : (
-          /* Active Chat Thread (either Room or Specific Direct Contact) */
+          /* Active Chat Thread (Room, Active Group, or Specific Direct Contact) */
           <>
             {/* Direct Chat Active Header */}
             {chatTab === 'direct' && activeDirectUser && (
@@ -482,6 +795,67 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose }) => {
               </div>
             )}
 
+            {/* Group Active Header */}
+            {chatTab === 'groups' && activeChatGroup && (
+              <div className="px-3.5 py-2.5 border-b border-slate-200/90 dark:border-slate-800 bg-indigo-50/40 dark:bg-indigo-950/20 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => setActiveChatGroupId(null)}
+                    className="p-1 rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200/80 dark:hover:bg-slate-800 transition cursor-pointer"
+                    title="Quay lại danh sách nhóm"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+
+                  <div
+                    className="w-7 h-7 rounded-xl flex items-center justify-center text-white font-bold text-xs shrink-0 shadow-xs"
+                    style={{ backgroundColor: activeChatGroup.color || '#6366f1' }}
+                  >
+                    <Hash className="w-4 h-4" />
+                  </div>
+
+                  <div className="min-w-0">
+                    <div className="font-bold text-xs text-slate-900 dark:text-slate-100 flex items-center gap-1.5 truncate">
+                      <span className="truncate">{activeChatGroup.name}</span>
+                      <span className="text-[9.5px] px-1.5 py-0.2 rounded-md bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 font-medium shrink-0">
+                        {activeChatGroup.category || 'Chung'}
+                      </span>
+                    </div>
+                    {activeChatGroup.description && (
+                      <p className="text-[10px] text-slate-400 truncate">
+                        {activeChatGroup.description}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setActiveChatGroupId(null)}
+                    className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline font-semibold"
+                  >
+                    Đổi nhóm
+                  </button>
+                  {(activeChatGroup.created_by === currentUser?.id || currentUser?.role === 'admin') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (confirm(`Bạn có chắc muốn xóa nhóm chat "${activeChatGroup.name}"?`)) {
+                          deleteChatGroup(activeChatGroup.id);
+                        }
+                      }}
+                      className="p-1 text-slate-400 hover:text-rose-500 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/30 transition"
+                      title="Xóa nhóm này"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Messages Scroll Area */}
             <div className="flex-1 overflow-y-auto p-4 space-y-3.5 bg-slate-50/40 dark:bg-[#0a0f1d]/70 text-xs">
               {currentMessages.length === 0 ? (
@@ -492,11 +866,15 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose }) => {
                   <p className="font-bold text-slate-800 dark:text-slate-200">
                     {chatTab === 'room'
                       ? 'Chưa có tin nhắn trong phòng này'
+                      : chatTab === 'groups'
+                      ? `Chưa có tin nhắn trong nhóm #${activeChatGroup?.name || ''}`
                       : `Bắt đầu cuộc trò chuyện với ${activeDirectUser?.display_name}`}
                   </p>
                   <p className="text-[11px] mt-1 text-slate-400 max-w-[260px]">
                     {chatTab === 'room'
                       ? 'Trao đổi tiến độ, chia sẻ tài liệu và liên kết công việc trực quan (#).'
+                      : chatTab === 'groups'
+                      ? 'Thảo luận chuyên sâu theo từng chủ đề hoặc hạng mục cụ thể.'
                       : isTargetInSameWorkspace
                       ? 'Vì cùng phòng làm việc, bạn có thể trao đổi tin nhắn, gửi tệp và đính kèm công việc.'
                       : 'Người này là bạn bè ngoài phòng. Bạn có thể gửi tin nhắn và gửi kèm tệp.'}
@@ -849,7 +1227,7 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose }) => {
                   </button>
 
                   {/* Mention button (@) */}
-                  {chatTab === 'room' && (
+                  {(chatTab === 'room' || chatTab === 'groups') && (
                     <button
                       type="button"
                       onClick={() => {
@@ -914,6 +1292,8 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose }) => {
                   placeholder={
                     chatTab === 'room'
                       ? 'Nhập tin nhắn trao đổi trong phòng...'
+                      : chatTab === 'groups'
+                      ? `Nhắn tin trong nhóm #${activeChatGroup?.name || ''}...`
                       : `Nhắn tin cho ${activeDirectUser?.display_name}...`
                   }
                   className="flex-1 px-3 py-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-[#152037] text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition"

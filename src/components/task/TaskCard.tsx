@@ -11,6 +11,9 @@ import {
   User,
   Clock,
   Send,
+  Copy,
+  Link as LinkIcon,
+  Repeat,
 } from 'lucide-react';
 import { Task } from '../../types';
 import { useApp } from '../../context/AppContext';
@@ -23,6 +26,8 @@ interface TaskCardProps {
   onDoubleClick: (task: Task) => void;
   onEdit: (task: Task) => void;
   onMoveRequest: (task: Task) => void;
+  currentClusterId?: string;
+  onReorder?: (sourceTaskId: string, targetTaskId: string, position: 'before' | 'after') => void;
 }
 
 export const TaskCard: React.FC<TaskCardProps> = ({
@@ -32,10 +37,23 @@ export const TaskCard: React.FC<TaskCardProps> = ({
   onDoubleClick,
   onEdit,
   onMoveRequest,
+  currentClusterId,
+  onReorder,
 }) => {
-  const { db, toggleTaskComplete, deleteTask, setStagedTaskForChat, setIsChatOpen, highlightedTaskId } = useApp();
+  const {
+    db,
+    toggleTaskComplete,
+    deleteTask,
+    setStagedTaskForChat,
+    setIsChatOpen,
+    highlightedTaskId,
+    reorderTaskInCluster,
+    copyTasks,
+  } = useApp();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+  const [dropPosition, setDropPosition] = useState<'before' | 'after' | null>(null);
+  const [copyFeedback, setCopyFeedback] = useState(false);
   const longPressTimer = useRef<NodeJS.Timeout | null>(null);
   const isLongPressTriggered = useRef(false);
 
@@ -86,6 +104,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
   };
 
   const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
     if (isLongPressTriggered.current) {
       isLongPressTriggered.current = false;
       return;
@@ -101,6 +120,41 @@ export const TaskCard: React.FC<TaskCardProps> = ({
   const handleDragStart = (e: React.DragEvent) => {
     e.dataTransfer.setData('text/plain', task.id);
     e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragEnd = () => {
+    setDropPosition(null);
+  };
+
+  const handleCardDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const offset = e.clientY - rect.top;
+    const isTopHalf = offset < rect.height / 2;
+    setDropPosition(isTopHalf ? 'before' : 'after');
+  };
+
+  const handleCardDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDropPosition(null);
+  };
+
+  const handleCardDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const sourceTaskId = e.dataTransfer.getData('text/plain');
+    const pos = dropPosition || 'before';
+    setDropPosition(null);
+
+    if (sourceTaskId && sourceTaskId !== task.id) {
+      if (onReorder) {
+        onReorder(sourceTaskId, task.id, pos);
+      } else {
+        reorderTaskInCluster(currentClusterId || task.cluster_id, sourceTaskId, task.id, pos);
+      }
+    }
   };
 
   const completedChecklistCount = task.checklists?.filter((c) => c.completed).length || 0;
@@ -121,13 +175,18 @@ export const TaskCard: React.FC<TaskCardProps> = ({
         id={`task-card-${task.id}`}
         draggable
         onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragOver={handleCardDragOver}
+        onDragLeave={handleCardDragLeave}
+        onDrop={handleCardDrop}
         onClick={handleClick}
+        data-task-card="true"
         onDoubleClick={() => onDoubleClick(task)}
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
         onMouseDown={handleTouchStart}
         onMouseUp={handleTouchEnd}
-        className={`group relative select-none w-full rounded-2xl p-3.5 transition-all duration-200 cursor-grab active:cursor-grabbing border ${
+        className={`group relative select-none w-full rounded-2xl p-3.5 transition-all duration-150 cursor-grab active:cursor-grabbing border ${
           isHighlighted
             ? 'ring-4 ring-indigo-500 shadow-2xl scale-[1.02] bg-indigo-50/90 dark:bg-indigo-950/70 border-indigo-600 animate-pulse'
             : isSelected
@@ -135,6 +194,14 @@ export const TaskCard: React.FC<TaskCardProps> = ({
             : 'bg-white dark:bg-[#131b2e] hover:bg-slate-50/70 dark:hover:bg-[#18233a] border-slate-200/90 dark:border-slate-800 shadow-xs hover:border-slate-300 dark:hover:border-slate-700'
         } ${task.is_completed ? 'opacity-70' : ''}`}
       >
+        {/* Drop indicator line top */}
+        {dropPosition === 'before' && (
+          <div className="absolute -top-1.5 left-2 right-2 h-1 bg-indigo-500 rounded-full z-10 shadow-sm animate-pulse pointer-events-none" />
+        )}
+        {/* Drop indicator line bottom */}
+        {dropPosition === 'after' && (
+          <div className="absolute -bottom-1.5 left-2 right-2 h-1 bg-indigo-500 rounded-full z-10 shadow-sm animate-pulse pointer-events-none" />
+        )}
         {/* Top row: Checkbox, Title & 3-dot Menu */}
         <div className="flex items-start justify-between gap-2.5">
           <div className="flex items-start gap-2.5 min-w-0 flex-1">
@@ -184,11 +251,28 @@ export const TaskCard: React.FC<TaskCardProps> = ({
                   <span>{priorityConfig.label}</span>
                 </span>
 
+                {/* Inherited badge */}
+                {task.is_inherited && (
+                  <span
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] sm:text-[10.5px] font-medium text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/40"
+                    title="Task này kế thừa từ task gốc, tự động đồng bộ khi task gốc thay đổi"
+                  >
+                    <LinkIcon className="w-2.5 h-2.5 text-purple-500" />
+                    <span>Kế thừa</span>
+                  </span>
+                )}
+
                 {/* Alarm / Due Time pill: Soft, non-aggressive, elegant font */}
                 {task.alarm_enabled && (displayAlarmTime || task.display_due_text) ? (
                   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] sm:text-[10.5px] font-medium text-amber-700/90 dark:text-amber-300/90 bg-amber-50/60 dark:bg-amber-950/25 border border-amber-200/50 dark:border-amber-800/40">
                     <Bell className="w-2.5 h-2.5 text-amber-500/90" />
                     <span>{displayAlarmTime || task.display_due_text}</span>
+                    {task.alarm_repeat && task.alarm_repeat !== 'none' && (
+                      <span className="flex items-center gap-0.5 text-[9.5px] text-amber-600 dark:text-amber-400 font-semibold border-l border-amber-300 dark:border-amber-700/60 pl-1 ml-0.5">
+                        <Repeat className="w-2.5 h-2.5" />
+                        {task.alarm_repeat === 'daily' ? 'Hàng ngày' : 'Hàng tuần'}
+                      </span>
+                    )}
                   </span>
                 ) : task.display_due_text ? (
                   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] sm:text-[10.5px] font-medium text-amber-700/90 dark:text-amber-300/90 bg-amber-50/60 dark:bg-amber-950/25 border border-amber-200/50 dark:border-amber-800/40">
@@ -288,6 +372,23 @@ export const TaskCard: React.FC<TaskCardProps> = ({
                   >
                     <Edit2 className="w-3.5 h-3.5 text-indigo-500" />
                     <span>Chỉnh sửa</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      copyTasks([task.id]);
+                      setCopyFeedback(true);
+                      setTimeout(() => {
+                        setCopyFeedback(false);
+                        setIsMenuOpen(false);
+                      }, 500);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition text-left"
+                  >
+                    <Copy className="w-3.5 h-3.5 text-emerald-500" />
+                    <span>{copyFeedback ? 'Đã chép task!' : 'Sao chép Task'}</span>
                   </button>
 
                   <button

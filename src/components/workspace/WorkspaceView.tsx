@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Plus,
   Layers,
@@ -6,7 +6,6 @@ import {
   Briefcase,
   Globe,
   Lock,
-  LayoutGrid,
   Columns3,
   Maximize2,
   Sparkles,
@@ -14,17 +13,23 @@ import {
   ChevronLeft,
   ChevronRight,
   FolderKanban,
-  SlidersHorizontal,
   Grid,
-  List
+  List,
+  Sliders,
+  Trash2,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { Task, Cluster, DivisionLayoutType } from '../../types';
+import { Task, Cluster, TaskPriority, BoardMode } from '../../types';
 import { ClusterColumn } from '../cluster/ClusterColumn';
 import { SmartAreaView } from '../smart_area/SmartAreaView';
 import { TaskEditorModal } from '../task/TaskEditorModal';
 import { BulkActionBar } from '../task/BulkActionBar';
 import { BulkMoveModal } from '../task/ActionModals';
+import { CreateBoardModeModal } from './CreateBoardModeModal';
+import { AddColumnToModeModal } from './AddColumnToModeModal';
+import { EditColumnInModeModal } from './EditColumnInModeModal';
+import { ConfirmModal } from '../common/ConfirmModal';
+import { getWeekdayClusterId, getPriorityClusterId } from '../../utils/boardModeUtils';
 
 interface WorkspaceViewProps {
   onOpenWorkspaceModal: (mode: 'create' | 'join') => void;
@@ -50,16 +55,29 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     viewMode,
     setViewMode,
     selectedTaskIds,
+    clearTaskSelection,
+    activeBoardModeId,
+    setActiveBoardModeId,
+    createBoardMode,
+    deleteBoardMode,
+    addColumnToBoardMode,
+    updateBoardModeColumn,
+    deleteBoardModeColumn,
+    deleteCluster,
+    moveTaskInMode,
+    reorderTaskInMode,
   } = useApp();
 
   // Modals state
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [taskToEdit, setTaskToEdit] = useState<Task | null>(null);
   const [targetClusterIdForNewTask, setTargetClusterIdForNewTask] = useState<string | undefined>(undefined);
-
+  const [isCreateModeModalOpen, setIsCreateModeModalOpen] = useState(false);
+  const [isAddColumnModalOpen, setIsAddColumnModalOpen] = useState(false);
+  const [columnToEditInMode, setColumnToEditInMode] = useState<{ id: string; name: string; color?: string } | null>(null);
+  const [modeToDelete, setModeToDelete] = useState<BoardMode | null>(null);
+  const [isDeleteModeConfirmOpen, setIsDeleteModeConfirmOpen] = useState(false);
   const [isBulkMoveOpen, setIsBulkMoveOpen] = useState(false);
-
-  // Single task action modal helpers
   const [singleTaskMove, setSingleTaskMove] = useState<Task | null>(null);
 
   // Single cluster design mode state (size + task layout)
@@ -69,7 +87,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   const [singleTaskLayout, setSingleTaskLayout] = useState<'stack' | 'grid2' | 'grid3'>(() => {
     return (localStorage.getItem('wtm_sc_layout') as 'stack' | 'grid2' | 'grid3') || 'grid2';
   });
-  const [isDesignPopoverOpen, setIsDesignPopoverOpen] = useState(false);
 
   const handleSetWidth = (w: 'md' | 'lg' | 'xl' | 'full') => {
     setSingleClusterWidth(w);
@@ -81,30 +98,135 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     localStorage.setItem('wtm_sc_layout', l);
   };
 
-  // Clusters for active division
-  const clusters = activeDivision
-    ? db.clusters
+  // Windows Explorer-like deselect on click outside
+  useEffect(() => {
+    const handleGlobalMouseDown = (e: MouseEvent) => {
+      if (selectedTaskIds.length === 0) return;
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+
+      if (
+        target.closest('[data-task-card]') ||
+        target.closest('[data-bulk-bar]') ||
+        target.closest('.fixed.z-50') ||
+        target.closest('button') ||
+        target.closest('input') ||
+        target.closest('select') ||
+        target.closest('textarea')
+      ) {
+        return;
+      }
+
+      clearTaskSelection();
+    };
+
+    window.addEventListener('mousedown', handleGlobalMouseDown);
+    return () => window.removeEventListener('mousedown', handleGlobalMouseDown);
+  }, [selectedTaskIds, clearTaskSelection]);
+
+  // Available Board Modes for the active division (Presets + Custom modes of this division)
+  const availableBoardModes = useMemo(() => {
+    const all = db.board_modes || [];
+    return all.filter(
+      (m) => m.is_preset || (activeDivision && m.division_id === activeDivision.id)
+    );
+  }, [db.board_modes, activeDivision]);
+
+  // Active Board Mode
+  const activeBoardMode = useMemo(() => {
+    return (
+      availableBoardModes.find((m) => m.id === activeBoardModeId) ||
+      availableBoardModes[0] || {
+        id: 'kanban',
+        name: 'Kanban',
+        is_preset: true,
+        clusters: [],
+      }
+    );
+  }, [availableBoardModes, activeBoardModeId]);
+
+  // Clusters to display in active mode
+  const activeClusters: Cluster[] = useMemo(() => {
+    if (!activeDivision) return [];
+    if (activeBoardMode.id === 'kanban') {
+      const divClusters = db.clusters
         .filter((c) => c.division_id === activeDivision.id)
-        .sort((a, b) => a.sort_order - b.sort_order)
-    : [];
+        .sort((a, b) => a.sort_order - b.sort_order);
+      return divClusters;
+    }
+
+    return (activeBoardMode.clusters || []).map((c, idx) => ({
+      id: c.id,
+      division_id: activeDivision.id,
+      name: c.name,
+      description: '',
+      color: c.color || '#6366F1',
+      sort_order: c.sort_order || idx + 1,
+      is_collapsed: false,
+      created_by: currentUser?.id || '',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }));
+  }, [activeDivision, activeBoardMode, db.clusters, currentUser]);
+
+  // Tasks in this division mapped to their clusters in the active mode
+  const tasksByClusterId: Record<string, Task[]> = useMemo(() => {
+    if (!activeDivision) return {};
+    const divisionTasks = db.tasks.filter(
+      (t) => t.division_id === activeDivision.id && !t.is_archived
+    );
+
+    const mapping: Record<string, Task[]> = {};
+    activeClusters.forEach((c) => {
+      mapping[c.id] = [];
+    });
+
+    const isKanban = activeBoardMode.id === 'kanban';
+    const isWeekday = activeBoardMode.id === 'weekday';
+    const isPriority = activeBoardMode.id === 'priority';
+    const fallbackClusterId = activeClusters[0]?.id;
+
+    divisionTasks.forEach((t) => {
+      let targetClusterId: string | undefined;
+
+      if (t.mode_clusters && t.mode_clusters[activeBoardMode.id]) {
+        targetClusterId = t.mode_clusters[activeBoardMode.id];
+      } else if (isKanban) {
+        targetClusterId = t.cluster_id;
+      } else if (isWeekday) {
+        targetClusterId = getWeekdayClusterId(t.due_date);
+      } else if (isPriority) {
+        targetClusterId = getPriorityClusterId(t.priority);
+      } else {
+        targetClusterId = fallbackClusterId;
+      }
+
+      if (targetClusterId && mapping[targetClusterId]) {
+        mapping[targetClusterId].push(t);
+      } else if (fallbackClusterId && mapping[fallbackClusterId]) {
+        mapping[fallbackClusterId].push(t);
+      }
+    });
+
+    return mapping;
+  }, [activeDivision, db.tasks, activeClusters, activeBoardMode]);
 
   // Active cluster for Single mode
-  const selectedClusterIndex = clusters.findIndex((c) => c.id === activeClusterId);
+  const selectedClusterIndex = activeClusters.findIndex((c) => c.id === activeClusterId);
   const effectiveIndex = selectedClusterIndex >= 0 ? selectedClusterIndex : 0;
-  const selectedCluster = clusters[effectiveIndex] || null;
+  const selectedCluster = activeClusters[effectiveIndex] || null;
 
   // Single view cluster navigation
   const handleNavigateCluster = (direction: -1 | 1) => {
-    if (clusters.length === 0) return;
-    const nextIndex = (effectiveIndex + direction + clusters.length) % clusters.length;
-    setActiveClusterId(clusters[nextIndex].id);
+    if (activeClusters.length === 0) return;
+    const nextIndex = (effectiveIndex + direction + activeClusters.length) % activeClusters.length;
+    setActiveClusterId(activeClusters[nextIndex].id);
   };
 
   // Keyboard navigation for single view
   useEffect(() => {
     if (viewMode !== 'single') return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't trigger if user is typing in an input/textarea
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
 
@@ -117,7 +239,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [viewMode, effectiveIndex, clusters]);
+  }, [viewMode, effectiveIndex, activeClusters]);
 
   // Task Handlers
   const handleAddTask = (clusterId: string) => {
@@ -139,6 +261,47 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   const handleMoveSingleTask = (task: Task) => {
     setSingleTaskMove(task);
     setIsBulkMoveOpen(true);
+  };
+
+  const handleOpenAddCluster = () => {
+    if (activeBoardMode.id === 'kanban') {
+      onOpenClusterModal(null);
+    } else {
+      setIsAddColumnModalOpen(true);
+    }
+  };
+
+  const handleEditClusterOrColumn = (cluster: Cluster) => {
+    if (activeBoardMode.id === 'kanban') {
+      onOpenClusterModal(cluster);
+    } else {
+      setColumnToEditInMode({
+        id: cluster.id,
+        name: cluster.name,
+        color: cluster.color,
+      });
+    }
+  };
+
+  const handleDeleteClusterOrColumn = (clusterId: string) => {
+    if (activeBoardMode.id === 'kanban') {
+      deleteCluster(clusterId);
+    } else {
+      deleteBoardModeColumn(activeBoardMode.id, clusterId);
+    }
+  };
+
+  const handleDropTaskInCurrentMode = (taskId: string, targetClusterId: string) => {
+    moveTaskInMode(taskId, activeBoardMode.id, targetClusterId);
+  };
+
+  const handleReorderTaskInCurrentMode = (
+    sourceTaskId: string,
+    targetTaskId: string,
+    position: 'before' | 'after',
+    clusterId: string
+  ) => {
+    reorderTaskInMode(sourceTaskId, targetTaskId, position, activeBoardMode.id, clusterId);
   };
 
   // EMPTY STATE 1: No active workspace
@@ -225,101 +388,220 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-slate-100/60 dark:bg-[#0a0f1d]">
       {/* Top Workspace Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-3 bg-white/95 dark:bg-[#0e1626]/95 border-b border-slate-200/90 dark:border-slate-800 backdrop-blur-xs shrink-0">
-        {/* Breadcrumb Hierarchy */}
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 truncate">
-            <span className="font-semibold text-slate-800 dark:text-slate-200">
-              {activePeriod.name}
-            </span>
-            <span>/</span>
-            <span className="font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-1">
-              {activeDivision.visibility === 'public' ? (
-                <Globe className="w-3.5 h-3.5 text-emerald-500" title="Công khai" />
-              ) : (
-                <Lock className="w-3.5 h-3.5 text-amber-500" title="Riêng tư" />
-              )}
-              <span className="truncate">{activeDivision.name}</span>
-            </span>
+      <div className="flex flex-col gap-2.5 px-4 sm:px-6 py-2.5 bg-white/95 dark:bg-[#0e1626]/95 border-b border-slate-200/90 dark:border-slate-800 backdrop-blur-xs shrink-0">
+        {/* Row 1: Breadcrumb + Mode Selector (PC pills / Mobile dropdown) + Layout Switcher */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {/* Breadcrumb Hierarchy */}
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 truncate">
+              <span className="font-semibold text-slate-800 dark:text-slate-200">
+                {activePeriod.name}
+              </span>
+              <span>/</span>
+              <span className="font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-1">
+                {activeDivision.visibility === 'public' ? (
+                  <Globe className="w-3.5 h-3.5 text-emerald-500" title="Công khai" />
+                ) : (
+                  <Lock className="w-3.5 h-3.5 text-amber-500" title="Riêng tư" />
+                )}
+                <span className="truncate">{activeDivision.name}</span>
+              </span>
+            </div>
+          </div>
+
+          {/* View Mode Switcher: Toàn cảnh vs Từng cụm vs Smart Area (Available in ALL Modes) */}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center p-0.5 bg-slate-100 dark:bg-slate-900 rounded-xl text-xs font-semibold border border-slate-200/80 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setViewMode('full')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition ${
+                  viewMode === 'full'
+                    ? 'bg-white dark:bg-[#152037] text-indigo-600 dark:text-indigo-400 shadow-xs font-bold'
+                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+                title="Xem tất cả các cụm (Full View)"
+              >
+                <Columns3 className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Toàn cảnh</span>
+                <span className="sm:hidden">Đầy đủ</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setViewMode('single')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition ${
+                  viewMode === 'single'
+                    ? 'bg-white dark:bg-[#152037] text-indigo-600 dark:text-indigo-400 shadow-xs font-bold'
+                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+                title="Xem từng cụm (Single View)"
+              >
+                <Maximize2 className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Từng cụm</span>
+                <span className="sm:hidden">Đơn</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setViewMode('smart_area')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition ${
+                  viewMode === 'smart_area'
+                    ? 'bg-white dark:bg-[#152037] text-indigo-600 dark:text-indigo-400 shadow-xs font-bold'
+                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+                title="Smart Area Canvas tự do"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
+                <span className="hidden sm:inline">Smart Area</span>
+                <span className="sm:hidden">Smart</span>
+              </button>
+            </div>
+
+            {/* Action Buttons: Add Cluster (ALWAYS PRESENT) */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleOpenAddCluster}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition"
+                title="Thêm cụm (cột) mới vào bảng"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Thêm cụm</span>
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* View mode buttons & actions */}
-        <div className="flex items-center gap-2">
-          {/* View Mode Switcher: Full vs Single vs Smart Area */}
-          <div className="flex items-center p-0.5 bg-slate-100 dark:bg-slate-900 rounded-xl text-xs font-semibold border border-slate-200/80 dark:border-slate-800">
+        {/* Row 2: Chế độ Bảng (Board Mode Selector) */}
+        <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100 dark:border-slate-800/60">
+          {/* Mobile / Android Dropdown */}
+          <div className="sm:hidden flex items-center gap-1.5 w-full">
+            <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 shrink-0">
+              Chế độ:
+            </span>
+            <select
+              value={activeBoardMode.id}
+              onChange={(e) => setActiveBoardModeId(e.target.value)}
+              className="flex-1 px-2.5 py-1 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#111827] text-slate-900 dark:text-slate-100 shadow-xs focus:ring-2 focus:ring-indigo-500"
+            >
+              {availableBoardModes.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name} {m.is_preset ? '' : '(Tự tạo)'}
+                </option>
+              ))}
+            </select>
             <button
               type="button"
-              onClick={() => setViewMode('full')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition ${
-                viewMode === 'full'
-                  ? 'bg-white dark:bg-[#152037] text-indigo-600 dark:text-indigo-400 shadow-xs'
-                  : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-              }`}
-              title="Xem tất cả các cụm (Full View)"
+              onClick={() => setIsCreateModeModalOpen(true)}
+              className="p-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200/80 dark:border-indigo-800 shrink-0 transition"
+              title="Tạo chế độ mới"
             >
-              <Columns3 className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Toàn cảnh</span>
-              <span className="sm:hidden">Đầy đủ</span>
+              <Plus className="w-3.5 h-3.5" />
             </button>
-
             <button
               type="button"
-              onClick={() => setViewMode('single')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition ${
-                viewMode === 'single'
-                  ? 'bg-white dark:bg-[#152037] text-indigo-600 dark:text-indigo-400 shadow-xs'
-                  : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+              disabled={activeBoardMode.is_preset}
+              onClick={() => {
+                if (!activeBoardMode.is_preset) {
+                  setModeToDelete(activeBoardMode);
+                  setIsDeleteModeConfirmOpen(true);
+                }
+              }}
+              className={`p-1.5 rounded-lg border shrink-0 transition ${
+                activeBoardMode.is_preset
+                  ? 'text-slate-300 dark:text-slate-600 border-slate-200 dark:border-slate-800 cursor-not-allowed opacity-40'
+                  : 'text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 border-rose-200 dark:border-rose-900'
               }`}
-              title="Xem từng cụm (Single View)"
+              title={activeBoardMode.is_preset ? 'Chế độ mặc định không thể xóa' : `Xóa chế độ đang chọn (${activeBoardMode.name})`}
             >
-              <Maximize2 className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Từng cụm</span>
-              <span className="sm:hidden">Đơn</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setViewMode('smart_area')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition ${
-                viewMode === 'smart_area'
-                  ? 'bg-white dark:bg-[#152037] text-indigo-600 dark:text-indigo-400 shadow-xs'
-                  : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-              }`}
-              title="Smart Area Canvas"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
-              <span className="hidden sm:inline">Smart Area</span>
-              <span className="sm:hidden">Smart</span>
+              <Trash2 className="w-3.5 h-3.5" />
             </button>
           </div>
 
-          {/* Add Cluster button */}
-          <button
-            type="button"
-            onClick={() => onOpenClusterModal(null)}
-            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Thêm cụm</span>
-          </button>
+          {/* PC / Wide Screen: Segmented Mode Switcher */}
+          <div className="hidden sm:flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs font-bold text-slate-500 dark:text-slate-400 mr-1">
+              Chế độ bảng:
+            </span>
+            {availableBoardModes.map((m) => {
+              const isActive = activeBoardMode.id === m.id;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => setActiveBoardModeId(m.id)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold transition ${
+                    isActive
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'bg-slate-100 dark:bg-[#131e33] text-slate-600 dark:text-slate-300 hover:bg-slate-200/80 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <span>{m.name}</span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.2 rounded-full ${
+                      isActive
+                        ? 'bg-white/20 text-white'
+                        : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    {m.clusters?.length || activeClusters.length} cột
+                  </span>
+                </button>
+              );
+            })}
+
+            {/* Nút Tạo chế độ mới (icon only, không có chữ mô tả) */}
+            <button
+              type="button"
+              onClick={() => setIsCreateModeModalOpen(true)}
+              className="p-1.5 rounded-xl border border-dashed border-indigo-300 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 transition"
+              title="Tạo chế độ mới"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+
+            {/* Nút Thùng rác xóa chế độ đang chọn (ngay kế bên nút tạo chế độ mới, icon only, không có chữ mô tả) */}
+            <button
+              type="button"
+              disabled={activeBoardMode.is_preset}
+              onClick={() => {
+                if (!activeBoardMode.is_preset) {
+                  setModeToDelete(activeBoardMode);
+                  setIsDeleteModeConfirmOpen(true);
+                }
+              }}
+              className={`p-1.5 rounded-xl border transition ${
+                activeBoardMode.is_preset
+                  ? 'text-slate-300 dark:text-slate-600 border-slate-200 dark:border-slate-800 cursor-not-allowed opacity-40'
+                  : 'text-rose-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 border-rose-200 dark:border-rose-900 shadow-2xs'
+              }`}
+              title={activeBoardMode.is_preset ? 'Chế độ mặc định không thể xóa' : `Xóa chế độ đang chọn (${activeBoardMode.name})`}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          <div className="hidden sm:block text-[11px] text-slate-400 dark:text-slate-500 font-medium">
+            {activeBoardMode.description}
+          </div>
         </div>
       </div>
 
       {/* VIEW CONTENT BASED ON VIEW MODE */}
       <div className="flex-1 overflow-hidden">
-        {clusters.length === 0 ? (
+        {activeClusters.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full p-6 text-center">
             <FolderKanban className="w-12 h-12 text-slate-400 mb-3" />
             <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-              Chưa có Cụm (Cluster) nào trong phân chia này
+              Chưa có Cụm nào trong chế độ {activeBoardMode.name}
             </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mt-1">
-              Hãy tạo cụm đầu tiên (ví dụ: &quot;Backlog&quot;, &quot;Đang làm&quot;, &quot;Hoàn tất&quot;) để bắt đầu quản lý task.
+              Hãy tạo cụm đầu tiên để bắt đầu quản lý và phân loại task.
             </p>
             <button
               type="button"
-              onClick={() => onOpenClusterModal(null)}
+              onClick={handleOpenAddCluster}
               className="mt-4 px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition"
             >
               + Tạo Cụm mới
@@ -327,7 +609,11 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           </div>
         ) : viewMode === 'smart_area' ? (
           <SmartAreaView
-            clusters={clusters}
+            clusters={activeClusters}
+            tasksByClusterId={tasksByClusterId}
+            onDropTaskInMode={handleDropTaskInCurrentMode}
+            allowDeleteCluster={activeBoardMode.id === 'kanban'}
+            allowEditCluster={activeBoardMode.id === 'kanban'}
             onAddTask={handleAddTask}
             onEditTask={handleEditTask}
             onDoubleClickTask={handleDoubleClickTask}
@@ -336,7 +622,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             onAddCluster={() => onOpenClusterModal(null)}
           />
         ) : viewMode === 'single' ? (
-          /* Single Cluster View with Prob 6 Left/Right Navigation & Design Customization */
+          /* Single Cluster View with Left/Right Navigation & Design Customization */
           <div className="flex flex-col h-full overflow-hidden p-3 sm:p-5 bg-slate-50/50 dark:bg-[#090e1a]">
             {/* Cluster Navigation Header (Dropdown + Left/Right arrows + Design Toolbar) */}
             <div
@@ -351,7 +637,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
               }`}
             >
               <div className="flex items-center flex-wrap gap-2">
-                {/* Previous cluster arrow */}
                 <button
                   type="button"
                   onClick={() => handleNavigateCluster(-1)}
@@ -363,22 +648,21 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
 
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                    Cụm ({effectiveIndex + 1}/{clusters.length}):
+                    Cụm ({effectiveIndex + 1}/{activeClusters.length}):
                   </span>
                   <select
                     value={selectedCluster?.id || ''}
                     onChange={(e) => setActiveClusterId(e.target.value)}
                     className="px-3 py-1.5 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] text-slate-900 dark:text-slate-100 shadow-xs focus:ring-2 focus:ring-indigo-500 transition"
                   >
-                    {clusters.map((c, idx) => (
+                    {activeClusters.map((c, idx) => (
                       <option key={c.id} value={c.id}>
-                        {idx + 1}. {c.name}
+                        {idx + 1}. {c.name} ({tasksByClusterId[c.id]?.length || 0})
                       </option>
                     ))}
                   </select>
                 </div>
 
-                {/* Next cluster arrow */}
                 <button
                   type="button"
                   onClick={() => handleNavigateCluster(1)}
@@ -389,7 +673,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                 </button>
               </div>
 
-              {/* Design Mode & Controls */}
+              {/* Design Controls: Width + Layout */}
               <div className="flex items-center gap-2 relative">
                 {/* Width selector pills */}
                 <div className="hidden sm:flex items-center p-0.5 rounded-xl bg-slate-200/70 dark:bg-[#131d31] border border-slate-300/70 dark:border-slate-800 text-[11px]">
@@ -499,11 +783,18 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
               >
                 <ClusterColumn
                   cluster={selectedCluster}
+                  explicitTasks={tasksByClusterId[selectedCluster.id] || []}
+                  modeId={activeBoardMode.id}
+                  onDropTaskInMode={handleDropTaskInCurrentMode}
+                  onReorderTaskInMode={handleReorderTaskInCurrentMode}
+                  allowDelete={true}
+                  allowEdit={true}
                   onAddTask={handleAddTask}
                   onEditTask={handleEditTask}
                   onDoubleClickTask={handleDoubleClickTask}
                   onMoveSingleTask={handleMoveSingleTask}
-                  onEditCluster={onOpenClusterModal}
+                  onEditCluster={handleEditClusterOrColumn}
+                  onDeleteCluster={handleDeleteClusterOrColumn}
                   taskLayout={singleTaskLayout}
                   className="shadow-md border border-slate-200/90 dark:border-slate-800 rounded-2xl overflow-hidden bg-white/90 dark:bg-[#101827]/90"
                 />
@@ -511,17 +802,24 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             )}
           </div>
         ) : (
-          /* Full View: All clusters side by side (Horizontal scrollable Kanban) */
+          /* Full View: All clusters of current mode side by side */
           <div className="flex items-start gap-4 p-4 sm:p-6 h-full overflow-x-auto overflow-y-hidden bg-slate-50/50 dark:bg-[#090e1a]">
-            {clusters.map((cluster) => (
+            {activeClusters.map((cluster) => (
               <ClusterColumn
                 key={cluster.id}
                 cluster={cluster}
+                explicitTasks={tasksByClusterId[cluster.id] || []}
+                modeId={activeBoardMode.id}
+                onDropTaskInMode={handleDropTaskInCurrentMode}
+                onReorderTaskInMode={handleReorderTaskInCurrentMode}
+                allowDelete={true}
+                allowEdit={true}
                 onAddTask={handleAddTask}
                 onEditTask={handleEditTask}
                 onDoubleClickTask={handleDoubleClickTask}
                 onMoveSingleTask={handleMoveSingleTask}
-                onEditCluster={onOpenClusterModal}
+                onEditCluster={handleEditClusterOrColumn}
+                onDeleteCluster={handleDeleteClusterOrColumn}
               />
             ))}
           </div>
@@ -544,6 +842,8 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         }}
         taskToEdit={taskToEdit}
         targetClusterId={targetClusterIdForNewTask}
+        selectedClusterId={selectedCluster?.id || activeClusterId || undefined}
+        activeBoardModeId={activeBoardMode.id}
       />
 
       {/* Bulk / Single Move Modal */}
@@ -553,8 +853,59 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           setIsBulkMoveOpen(false);
           setSingleTaskMove(null);
         }}
-        clusters={clusters}
+        clusters={activeClusters}
         taskIdsToMove={singleTaskMove ? [singleTaskMove.id] : selectedTaskIds}
+        modeId={activeBoardMode.id}
+      />
+
+      {/* Create Board Mode Modal */}
+      <CreateBoardModeModal
+        isOpen={isCreateModeModalOpen}
+        onClose={() => setIsCreateModeModalOpen(false)}
+        onCreateMode={(name, description, clusters) => {
+          createBoardMode(name, description, clusters);
+        }}
+      />
+
+      {/* Add Column/Cluster to Current Mode Modal */}
+      <AddColumnToModeModal
+        isOpen={isAddColumnModalOpen}
+        onClose={() => setIsAddColumnModalOpen(false)}
+        modeName={activeBoardMode.name}
+        onAddColumn={(name, color) => {
+          addColumnToBoardMode(activeBoardMode.id, name, color);
+        }}
+      />
+
+      {/* Edit Column/Cluster Modal in Current Mode */}
+      <EditColumnInModeModal
+        isOpen={!!columnToEditInMode}
+        onClose={() => setColumnToEditInMode(null)}
+        column={columnToEditInMode}
+        modeName={activeBoardMode.name}
+        onSave={(colId, name, color) => {
+          updateBoardModeColumn(activeBoardMode.id, colId, name, color);
+          setColumnToEditInMode(null);
+        }}
+      />
+
+      {/* Confirm Delete Board Mode Modal */}
+      <ConfirmModal
+        isOpen={isDeleteModeConfirmOpen}
+        title="Xác nhận xóa chế độ bảng"
+        message={`Bạn có chắc muốn xóa chế độ bảng "${modeToDelete?.name}" không? Toàn bộ công việc vẫn được lưu giữ an toàn, chỉ chế độ hiển thị này bị xóa.`}
+        confirmText="Xác nhận xóa"
+        onConfirm={() => {
+          if (modeToDelete) {
+            deleteBoardMode(modeToDelete.id);
+            setModeToDelete(null);
+          }
+          setIsDeleteModeConfirmOpen(false);
+        }}
+        onCancel={() => {
+          setIsDeleteModeConfirmOpen(false);
+          setModeToDelete(null);
+        }}
       />
     </div>
   );

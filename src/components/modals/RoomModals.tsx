@@ -91,12 +91,37 @@ interface ActivityLogsModalProps {
 }
 
 export const ActivityLogsModal: React.FC<ActivityLogsModalProps> = ({ isOpen, onClose }) => {
-  const { db, activeWorkspace } = useApp();
+  const { db, activeWorkspace, currentUser } = useApp();
 
   if (!isOpen || !activeWorkspace) return null;
 
   const logs = db.activity_logs
-    .filter((l) => l.workspace_id === activeWorkspace.id)
+    .filter((l) => {
+      if (l.workspace_id !== activeWorkspace.id) return false;
+
+      // Privacy check: Never share activity logs of private divisions with other users
+      let divisionId = l.metadata?.division_id;
+      if (!divisionId && l.entity_type === 'division') {
+        divisionId = l.entity_id;
+      }
+      if (!divisionId && l.entity_type === 'task') {
+        const task = db.tasks.find((t) => t.id === l.entity_id);
+        if (task) divisionId = task.division_id;
+      }
+
+      if (divisionId) {
+        const division = db.divisions.find((d) => d.id === divisionId);
+        if (division && division.visibility === 'private' && division.owner_id !== currentUser?.id) {
+          return false;
+        }
+      }
+
+      if (l.metadata?.is_private && l.metadata?.division_owner_id && l.metadata.division_owner_id !== currentUser?.id) {
+        return false;
+      }
+
+      return true;
+    })
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
   return (

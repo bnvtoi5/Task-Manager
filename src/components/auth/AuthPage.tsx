@@ -38,14 +38,6 @@ export const AuthPage: React.FC = () => {
     }
   };
 
-  // Quick fill default admin
-  const handleQuickFillAdmin = () => {
-    setEmail('admin@system.local');
-    setPassword('Admin@123456');
-    setTab('login');
-    setErrorMsg('');
-  };
-
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 bg-gradient-to-b from-neutral-50 to-neutral-100 dark:from-neutral-950 dark:to-neutral-900 transition-colors">
       <div className="w-full max-w-md">
@@ -116,16 +108,16 @@ export const AuthPage: React.FC = () => {
             <form onSubmit={handleLogin} className="space-y-4 text-xs">
               <div>
                 <label className="block font-medium text-neutral-700 dark:text-neutral-300 mb-1.5">
-                  Email tài khoản
+                  Tên đăng nhập hoặc Email
                 </label>
                 <div className="relative">
                   <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
                   <input
-                    type="email"
+                    type="text"
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="name@company.com"
+                    placeholder="admin hoặc email của bạn"
                     className="w-full pl-9 pr-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
                   />
                 </div>
@@ -218,25 +210,6 @@ export const AuthPage: React.FC = () => {
               </button>
             </form>
           )}
-
-          {/* Default Admin Quick-Fill Banner */}
-          <div className="mt-6 pt-5 border-t border-neutral-100 dark:border-neutral-800 text-center">
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 text-[11px] font-medium border border-purple-200 dark:border-purple-900 mb-2">
-              <Shield className="w-3 h-3" />
-              <span>Chỉ có 1 tài khoản Admin mặc định</span>
-            </div>
-            <p className="text-[11px] text-neutral-500 dark:text-neutral-400 mb-2.5">
-              Hệ thống khởi động sạch, không có dữ liệu mẫu. Dùng admin để kiểm tra quyền quản trị:
-            </p>
-            <button
-              type="button"
-              onClick={handleQuickFillAdmin}
-              className="w-full py-2 px-3 rounded-lg border border-purple-200 dark:border-purple-800 hover:bg-purple-50 dark:hover:bg-purple-950/30 text-purple-700 dark:text-purple-300 text-xs font-medium transition flex items-center justify-center gap-1.5"
-            >
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>Điền nhanh Admin (admin@system.local)</span>
-            </button>
-          </div>
         </div>
       </div>
     </div>

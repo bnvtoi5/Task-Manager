@@ -24,6 +24,8 @@ interface TaskEditorModalProps {
   onClose: () => void;
   taskToEdit?: Task | null;
   targetClusterId?: string;
+  selectedClusterId?: string;
+  activeBoardModeId?: string;
 }
 
 export const TaskEditorModal: React.FC<TaskEditorModalProps> = ({
@@ -31,6 +33,8 @@ export const TaskEditorModal: React.FC<TaskEditorModalProps> = ({
   onClose,
   taskToEdit,
   targetClusterId,
+  selectedClusterId,
+  activeBoardModeId,
 }) => {
   const {
     db,
@@ -58,6 +62,10 @@ export const TaskEditorModal: React.FC<TaskEditorModalProps> = ({
   // Alarm settings
   const [alarmEnabled, setAlarmEnabled] = useState(false);
   const [alarmAt, setAlarmAt] = useState('');
+  const [alarmRepeat, setAlarmRepeat] = useState<'none' | 'daily' | 'weekly'>('none');
+
+  // Inheritance
+  const [isInherited, setIsInherited] = useState(false);
 
   // Checklists
   const [checklists, setChecklists] = useState<TaskChecklistItem[]>([]);
@@ -71,9 +79,11 @@ export const TaskEditorModal: React.FC<TaskEditorModalProps> = ({
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
 
   // Active division clusters
-  const divisionClusters = db.clusters.filter(
-    (c) => c.division_id === (taskToEdit ? taskToEdit.division_id : activeDivision?.id)
-  );
+  const divisionClusters = React.useMemo(() => {
+    return db.clusters
+      .filter((c) => c.division_id === (taskToEdit ? taskToEdit.division_id : activeDivision?.id))
+      .sort((a, b) => a.sort_order - b.sort_order);
+  }, [db.clusters, taskToEdit, activeDivision]);
 
   // Available users in system and current workspace
   const availableUsers = React.useMemo(() => {
@@ -104,6 +114,8 @@ export const TaskEditorModal: React.FC<TaskEditorModalProps> = ({
   };
 
   useEffect(() => {
+    if (!isOpen) return;
+
     if (taskToEdit) {
       setTitle(taskToEdit.title || '');
       setDescription(taskToEdit.description || '');
@@ -117,6 +129,8 @@ export const TaskEditorModal: React.FC<TaskEditorModalProps> = ({
       setClusterId(taskToEdit.cluster_id || '');
       setAlarmEnabled(taskToEdit.alarm_enabled || false);
       setAlarmAt(formatDateTimeLocal(taskToEdit.alarm_at));
+      setAlarmRepeat(taskToEdit.alarm_repeat || 'none');
+      setIsInherited(taskToEdit.is_inherited || false);
       setChecklists(taskToEdit.checklists || []);
       setTags(taskToEdit.tags || []);
     } else {
@@ -129,15 +143,46 @@ export const TaskEditorModal: React.FC<TaskEditorModalProps> = ({
       setAssignedTo('');
       setDueDate('');
       setDisplayDueText('');
-      setClusterId(targetClusterId || divisionClusters[0]?.id || '');
+
+      const isKanban = !activeBoardModeId || activeBoardModeId === 'kanban';
+      const availableClus = db.clusters
+        .filter((c) => c.division_id === (activeDivision?.id || ''))
+        .sort((a, b) => a.sort_order - b.sort_order);
+
+      if (isKanban) {
+        // Board mode 1 (Kanban):
+        // Pre-select cluster from clicked "+" button or selected cluster in Single view
+        const chosenCluster =
+          targetClusterId && availableClus.some((c) => c.id === targetClusterId)
+            ? targetClusterId
+            : selectedClusterId && availableClus.some((c) => c.id === selectedClusterId)
+            ? selectedClusterId
+            : availableClus[0]?.id || '';
+        setClusterId(chosenCluster);
+      } else {
+        // Other board modes: automatically default to Cluster 1
+        const firstClusterId = availableClus[0]?.id || '';
+        setClusterId(firstClusterId);
+
+        // Pre-set priority if adding to priority mode column
+        if (activeBoardModeId === 'priority') {
+          if (targetClusterId === 'pr-urgent') setPriority('urgent');
+          else if (targetClusterId === 'pr-high') setPriority('high');
+          else if (targetClusterId === 'pr-medium') setPriority('medium');
+          else if (targetClusterId === 'pr-low') setPriority('low');
+        }
+      }
+
       setAlarmEnabled(false);
+      setAlarmRepeat('none');
+      setIsInherited(false);
       // Default alarm: 1 hour from now
       const defaultAlarm = new Date(Date.now() + 60 * 60 * 1000);
       setAlarmAt(formatDateTimeLocal(defaultAlarm.toISOString()));
       setChecklists([]);
       setTags([]);
     }
-  }, [taskToEdit, targetClusterId, isOpen]);
+  }, [isOpen, taskToEdit?.id]);
 
   if (!isOpen) return null;
 
@@ -206,12 +251,8 @@ export const TaskEditorModal: React.FC<TaskEditorModalProps> = ({
     e.preventDefault();
     if (!title.trim()) return;
 
-    if (!clusterId) {
-      alert('Vui lòng chọn Cụm (Cluster) cho công việc!');
-      return;
-    }
-
     const isoAlarm = alarmEnabled && alarmAt ? new Date(alarmAt).toISOString() : null;
+    const chosenClu = clusterId || (divisionClusters.length > 0 ? divisionClusters[0].id : '');
 
     if (taskToEdit) {
       updateTask(taskToEdit.id, {
@@ -226,22 +267,31 @@ export const TaskEditorModal: React.FC<TaskEditorModalProps> = ({
         display_due_text: displayDueText.trim() || null,
         alarm_enabled: alarmEnabled,
         alarm_at: isoAlarm,
+        alarm_repeat: alarmRepeat,
         alarm_triggered: alarmEnabled ? false : taskToEdit.alarm_triggered,
+        is_inherited: isInherited,
         checklists,
         tags,
-        cluster_id: clusterId,
+        cluster_id: chosenClu || taskToEdit.cluster_id,
       });
     } else {
-      if (!activeWorkspace || !activePeriod || !activeDivision) {
-        alert('Thiếu thông tin phòng làm việc hoặc phân chia.');
-        return;
-      }
+      const wsId = activeWorkspace?.id || db.workspaces[0]?.id || 'ws-default';
+      const perId = activePeriod?.id || db.periods.find((p) => p.workspace_id === wsId)?.id || `per-default-${wsId}`;
+      const divId = activeDivision?.id || db.divisions.find((d) => d.workspace_id === wsId)?.id || `div-default-${wsId}`;
+      const resolvedClusterId = chosenClu || `clu-default-${divId}`;
+
+      const isKanban = !activeBoardModeId || activeBoardModeId === 'kanban';
+      const modeClustersData =
+        !isKanban && activeBoardModeId && targetClusterId
+          ? { [activeBoardModeId]: targetClusterId }
+          : undefined;
 
       createTask({
-        workspace_id: activeWorkspace.id,
-        period_id: activePeriod.id,
-        division_id: activeDivision.id,
-        cluster_id: clusterId,
+        workspace_id: wsId,
+        period_id: perId,
+        division_id: divId,
+        cluster_id: resolvedClusterId,
+        mode_clusters: modeClustersData,
         assigned_to: assignedTo || null,
         title: title.trim(),
         description: description.trim(),
@@ -253,6 +303,7 @@ export const TaskEditorModal: React.FC<TaskEditorModalProps> = ({
         display_due_text: displayDueText.trim() || null,
         alarm_enabled: alarmEnabled,
         alarm_at: isoAlarm,
+        alarm_repeat: alarmRepeat,
         alarm_triggered: false,
         checklists,
         tags,
@@ -345,56 +396,33 @@ export const TaskEditorModal: React.FC<TaskEditorModalProps> = ({
               />
             </div>
 
-            {/* Cluster & Priority Row */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-              {/* Cluster Dropdown */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
-                  Khu vực / Cột
-                </label>
-                <div className="relative">
-                  <select
-                    value={clusterId}
-                    onChange={(e) => setClusterId(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition"
+            {/* Priority Pills */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
+                Mức độ ưu tiên
+              </label>
+              <div className="grid grid-cols-4 gap-1 p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-xl text-xs font-semibold text-center">
+                {(
+                  [
+                    { id: 'low', label: 'Thấp' },
+                    { id: 'medium', label: 'Trung bình' },
+                    { id: 'high', label: 'Ưu tiên cao' },
+                    { id: 'urgent', label: 'Khẩn cấp' },
+                  ] as const
+                ).map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setPriority(item.id)}
+                    className={`py-1.5 rounded-lg transition ${
+                      priority === item.id
+                        ? 'bg-indigo-600 text-white shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                    }`}
                   >
-                    {divisionClusters.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {/* Priority Pills */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
-                  Mức độ ưu tiên
-                </label>
-                <div className="grid grid-cols-4 gap-1 p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-xl text-xs font-semibold text-center">
-                  {(
-                    [
-                      { id: 'low', label: 'Thấp' },
-                      { id: 'medium', label: 'Trung bình' },
-                      { id: 'high', label: 'Ưu tiên cao' },
-                      { id: 'urgent', label: 'Khẩn cấp' },
-                    ] as const
-                  ).map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => setPriority(item.id)}
-                      className={`py-1 rounded-lg transition ${
-                        priority === item.id
-                          ? 'bg-indigo-600 text-white shadow-xs'
-                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                      }`}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
+                    {item.label}
+                  </button>
+                ))}
               </div>
             </div>
 
@@ -437,7 +465,7 @@ export const TaskEditorModal: React.FC<TaskEditorModalProps> = ({
               </div>
 
               {alarmEnabled && (
-                <div className="space-y-2 pt-1">
+                <div className="space-y-2.5 pt-1">
                   <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                     <span className="text-xs font-medium text-amber-800 dark:text-amber-300 shrink-0">
                       Thời gian báo thức (Giờ & Ngày):
@@ -449,12 +477,78 @@ export const TaskEditorModal: React.FC<TaskEditorModalProps> = ({
                       className="flex-1 px-3 py-1.5 text-xs font-semibold bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
                     />
                   </div>
+
+                  {/* Recurring Alarm: none, daily, weekly */}
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-1 border-t border-amber-200/80 dark:border-amber-800/40">
+                    <span className="text-xs font-medium text-amber-900 dark:text-amber-300 shrink-0">
+                      Tần suất lặp lại:
+                    </span>
+                    <div className="flex items-center gap-3 text-xs">
+                      <label className="flex items-center gap-1.5 cursor-pointer text-amber-900 dark:text-amber-200">
+                        <input
+                          type="radio"
+                          name="alarm_repeat"
+                          value="none"
+                          checked={alarmRepeat === 'none'}
+                          onChange={() => setAlarmRepeat('none')}
+                          className="text-amber-600 focus:ring-amber-500"
+                        />
+                        <span>Không lặp</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 cursor-pointer text-amber-900 dark:text-amber-200 font-medium">
+                        <input
+                          type="radio"
+                          name="alarm_repeat"
+                          value="daily"
+                          checked={alarmRepeat === 'daily'}
+                          onChange={() => setAlarmRepeat('daily')}
+                          className="text-amber-600 focus:ring-amber-500"
+                        />
+                        <span>Hàng ngày</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 cursor-pointer text-amber-900 dark:text-amber-200 font-medium">
+                        <input
+                          type="radio"
+                          name="alarm_repeat"
+                          value="weekly"
+                          checked={alarmRepeat === 'weekly'}
+                          onChange={() => setAlarmRepeat('weekly')}
+                          className="text-amber-600 focus:ring-amber-500"
+                        />
+                        <span>Hàng tuần</span>
+                      </label>
+                    </div>
+                  </div>
+
                   <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-relaxed">
-                    ⚡ Khi đến giờ hẹn, ứng dụng sẽ phát chuông báo, gửi thông báo Web và gửi Email (nếu đã bật trong Cài đặt).
+                    ⚡ Khi đến giờ hẹn, ứng dụng sẽ phát chuông báo, gửi thông báo Web và nếu có task kế thừa thì các task kế thừa cũng tự động đồng bộ theo.
                   </p>
                 </div>
               )}
             </div>
+
+            {/* Task Inheritance block if task has parent or is in editing mode */}
+            {taskToEdit?.parent_task_id && (
+              <div className="p-3.5 rounded-xl border border-purple-200 dark:border-purple-800/60 bg-purple-50/50 dark:bg-purple-950/20 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-purple-900 dark:text-purple-300">
+                    🔗 Kế thừa từ Task gốc
+                  </span>
+                  <label className="flex items-center gap-1.5 cursor-pointer text-xs font-semibold text-purple-900 dark:text-purple-300">
+                    <input
+                      type="checkbox"
+                      checked={isInherited}
+                      onChange={(e) => setIsInherited(e.target.checked)}
+                      className="w-4 h-4 text-purple-600 rounded border-purple-300 focus:ring-purple-500"
+                    />
+                    <span>Bật kế thừa nội dung & báo thức</span>
+                  </label>
+                </div>
+                <p className="text-[11px] text-purple-700 dark:text-purple-300/80 leading-relaxed">
+                  Khi bật kế thừa, nếu task gốc được cập nhật nội dung, hạn chót hoặc chuông báo, task này sẽ tự động thay đổi theo (giữ nguyên vị trí phân chia & cụm cột riêng).
+                </p>
+              </div>
+            )}
 
             {/* Display Due Text on card */}
             <div>

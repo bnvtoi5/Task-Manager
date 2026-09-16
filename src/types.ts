@@ -4,6 +4,7 @@ export interface UserProfile {
   id: string;
   email: string;
   display_name: string;
+  password?: string;
   avatar_url?: string;
   status_message?: string;
   bio?: string;
@@ -61,6 +62,24 @@ export interface Period {
 
 export type DivisionVisibility = 'public' | 'private';
 export type DivisionLayoutType = 'full' | 'single' | 'smart_area';
+
+export interface BoardModeCluster {
+  id: string;
+  name: string;
+  color: string;
+  icon?: string;
+  sort_order: number;
+}
+
+export interface BoardMode {
+  id: string;
+  name: string;
+  description?: string;
+  icon?: string;
+  is_preset?: boolean;
+  division_id?: string;
+  clusters: BoardModeCluster[];
+}
 
 export interface Division {
   id: string;
@@ -120,9 +139,13 @@ export interface Task {
   display_due_text?: string;
   alarm_enabled?: boolean;
   alarm_at?: string | null;
+  alarm_time?: string | null;
+  alarm_repeat?: 'none' | 'daily' | 'weekly';
   alarm_triggered?: boolean;
   reminder_at?: string | null;
   reminder_mode?: 'toast' | 'notification' | 'all';
+  parent_task_id?: string | null;
+  is_inherited?: boolean;
   checklists?: TaskChecklistItem[];
   tags?: string[];
   color?: string;
@@ -132,6 +155,8 @@ export interface Task {
   is_completed: boolean;
   is_archived: boolean;
   is_private: boolean;
+  mode_clusters?: Record<string, string>; // modeId -> clusterId (independent per mode)
+  mode_sort_orders?: Record<string, number>; // modeId -> sort_order (independent per mode)
   created_at: string;
   updated_at: string;
 }
@@ -161,9 +186,21 @@ export interface SmartAreaItem {
   is_visible: boolean;
 }
 
+export interface ChatGroup {
+  id: string;
+  workspace_id: string;
+  name: string;
+  category?: string;
+  description?: string;
+  icon_color?: string;
+  created_by: string;
+  created_at: string;
+}
+
 export interface ChatMessage {
   id: string;
   workspace_id: string;
+  group_id?: string | null;
   sender_id: string;
   receiver_id?: string | null;
   task_id?: string | null;
@@ -227,6 +264,9 @@ export interface SystemSetting {
   max_workspaces_per_user: number;
   default_user_role: UserRole;
   maintenance_mode: boolean;
+  auto_snapshot_frequency?: 'daily' | '12h' | '6h' | 'manual';
+  last_auto_snapshot_at?: string;
+  auto_snapshot_excluded_division_ids?: string[];
   smtp_enabled?: boolean;
   smtp_host?: string;
   smtp_port?: number;
@@ -236,3 +276,46 @@ export interface SystemSetting {
   smtp_from_name?: string;
   smtp_from_email?: string;
 }
+
+export interface DatabaseSnapshot {
+  id: string;
+  workspace_id?: string | null;
+  name: string;
+  description?: string;
+  created_by: string;
+  created_by_name?: string;
+  created_at: string;
+  auto_generated?: boolean;
+  saved_division_ids?: string[];
+  saved_division_names?: string[];
+  stats: {
+    workspaces_count: number;
+    periods_count: number;
+    divisions_count: number;
+    clusters_count: number;
+    tasks_count: number;
+    completed_tasks_count: number;
+  };
+  data_state: string; // JSON stringify of DatabaseState
+}
+
+export interface RestorePoint {
+  id: string;
+  workspace_id?: string | null;
+  name: string;
+  description?: string;
+  created_by: string;
+  created_by_name: string;
+  created_at: string;
+  affected_divisions: {
+    id: string;
+    name: string;
+    visibility: 'public' | 'private';
+    clusters_count: number;
+    tasks_count: number;
+  }[];
+  data_state: string; // JSON stringify of DatabaseState
+}
+
+export type AppTheme = 'light' | 'dark' | 'warm-book' | 'neon';
+

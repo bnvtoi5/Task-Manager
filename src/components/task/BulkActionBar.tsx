@@ -17,7 +17,10 @@ export const BulkActionBar: React.FC<BulkActionBarProps> = ({
 
   return (
     <>
-      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 px-4 py-2.5 bg-neutral-900/90 dark:bg-neutral-800/95 text-white backdrop-blur-md rounded-2xl shadow-xl border border-neutral-700/60 animate-in slide-in-from-bottom-5 duration-200">
+      <div
+        data-bulk-bar="true"
+        className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 px-4 py-2.5 bg-neutral-900/90 dark:bg-neutral-800/95 text-white backdrop-blur-md rounded-2xl shadow-xl border border-neutral-700/60 animate-in slide-in-from-bottom-5 duration-200"
+      >
         {/* Selection counter */}
         <div className="flex items-center gap-2 pr-2 border-r border-neutral-700 text-xs font-medium text-neutral-300">
           <CheckCheck className="w-4 h-4 text-blue-400" />

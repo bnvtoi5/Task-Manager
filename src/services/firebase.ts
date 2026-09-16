@@ -53,6 +53,8 @@ export function subscribeToFirestore(
         if (data && data.stateJson) {
           try {
             const parsed = JSON.parse(data.stateJson) as DatabaseState;
+            if (!parsed.chat_groups) parsed.chat_groups = [];
+            if (!parsed.snapshots) parsed.snapshots = [];
             onRemoteData(parsed);
             onStatusChange?.('connected');
           } catch (e) {

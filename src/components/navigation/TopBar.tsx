@@ -17,11 +17,15 @@ import {
   Check,
   X,
   Trash2,
-  Cloud
+  Cloud,
+  History,
+  Palette,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { AppTheme } from '../../types';
 import { ConfirmModal } from '../common/ConfirmModal';
 import { ProfileEditModal } from '../profile/ProfileEditModal';
+import { SnapshotModal } from '../modals/SnapshotModal';
 
 interface TopBarProps {
   onOpenWorkspaceModal: (mode: 'create' | 'join') => void;
@@ -39,6 +43,7 @@ export const TopBar: React.FC<TopBarProps> = ({
     setActiveWorkspaceId,
     deleteWorkspace,
     theme,
+    setTheme,
     toggleTheme,
     navigateTo,
     logout,
@@ -61,6 +66,8 @@ export const TopBar: React.FC<TopBarProps> = ({
 
   const [isWsDropdownOpen, setIsWsDropdownOpen] = useState(false);
   const [isUserDropdownOpen, setIsUserDropdownOpen] = useState(false);
+  const [isThemeDropdownOpen, setIsThemeDropdownOpen] = useState(false);
+  const [isSnapshotModalOpen, setIsSnapshotModalOpen] = useState(false);
   const [isFilterPopoverOpen, setIsFilterPopoverOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
@@ -418,15 +425,74 @@ export const TopBar: React.FC<TopBarProps> = ({
             )}
           </button>
 
-          {/* Theme Toggle - Free switch between Light and Dark mode */}
+          {/* Snapshots & Backup Button */}
           <button
             type="button"
-            onClick={toggleTheme}
-            className="p-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition"
-            title={theme === 'light' ? 'Chuyển sang chế độ tối' : 'Chuyển sang chế độ sáng'}
+            onClick={() => setIsSnapshotModalOpen(true)}
+            className="p-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition relative"
+            title="Lịch sử & Bản sao lưu (Snapshots & Rollback)"
           >
-            {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4 text-amber-400" />}
+            <History className="w-4 h-4 text-indigo-500" />
+            {(db.snapshots || []).length > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 text-[9px] font-bold px-1 rounded-full bg-indigo-100 dark:bg-indigo-900/80 text-indigo-700 dark:text-indigo-300">
+                {(db.snapshots || []).length}
+              </span>
+            )}
           </button>
+
+          {/* Theme Selector Popover (5 Themes) */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setIsThemeDropdownOpen((v) => !v)}
+              className="p-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition flex items-center gap-1"
+              title="Chọn giao diện hiển thị"
+            >
+              <Palette className="w-4 h-4 text-indigo-500" />
+            </button>
+
+            {isThemeDropdownOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setIsThemeDropdownOpen(false)}
+                />
+                <div className="absolute right-0 top-full mt-2 w-52 bg-white dark:bg-[#111927] border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl py-2 z-50 text-xs">
+                  <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    Giao diện hiển thị
+                  </div>
+                  {[
+                    { id: 'light', label: 'Sáng thanh lịch', icon: Sun, color: 'bg-amber-100 text-amber-600' },
+                    { id: 'dark', label: 'Tối chuẩn (Navy)', icon: Moon, color: 'bg-slate-800 text-indigo-400' },
+                    { id: 'warm-book', label: 'Giấy ấm dịu mắt (Book Paper)', icon: Sun, color: 'bg-[#f7f4eb] text-[#248a5b]' },
+                    { id: 'neon', label: 'Neon Cyberpunk', icon: Palette, color: 'bg-cyan-950 text-cyan-400' },
+                  ].map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => {
+                        setTheme(t.id as AppTheme);
+                        setIsThemeDropdownOpen(false);
+                      }}
+                      className={`w-full flex items-center justify-between px-3 py-2 text-left hover:bg-slate-50 dark:hover:bg-slate-800/60 transition ${
+                        theme === t.id
+                          ? 'font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/30'
+                          : 'text-slate-700 dark:text-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] ${t.color}`}>
+                          <t.icon className="w-2.5 h-2.5" />
+                        </span>
+                        <span>{t.label}</span>
+                      </div>
+                      {theme === t.id && <Check className="w-3.5 h-3.5" />}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
 
           {/* User Profile & Role Dropdown */}
           <div className="relative ml-1">
@@ -544,6 +610,12 @@ export const TopBar: React.FC<TopBarProps> = ({
       <ProfileEditModal
         isOpen={isProfileModalOpen}
         onClose={() => setIsProfileModalOpen(false)}
+      />
+
+      {/* Snapshot & Rollback Modal */}
+      <SnapshotModal
+        isOpen={isSnapshotModalOpen}
+        onClose={() => setIsSnapshotModalOpen(false)}
       />
 
       {/* In-app Workspace Deletion Confirm Modal */}

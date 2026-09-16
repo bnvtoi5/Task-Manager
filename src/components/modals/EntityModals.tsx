@@ -448,6 +448,7 @@ export const DivisionModal: React.FC<DivisionModalProps> = ({
   const [description, setDescription] = useState('');
   const [visibility, setVisibility] = useState<DivisionVisibility>('public');
   const [color, setColor] = useState('#4F46E5');
+  const [template, setTemplate] = useState<'kanban_3' | 'cluster_3' | 'weekday' | 'priority' | 'single'>('kanban_3');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   useEffect(() => {
@@ -461,6 +462,7 @@ export const DivisionModal: React.FC<DivisionModalProps> = ({
       setDescription('');
       setVisibility('public');
       setColor('#4F46E5');
+      setTemplate('kanban_3');
     }
   }, [divisionToEdit, isOpen]);
 
@@ -479,18 +481,21 @@ export const DivisionModal: React.FC<DivisionModalProps> = ({
       });
     } else {
       if (!activeWorkspace || !activePeriod) return;
-      createDivision({
-        period_id: activePeriod.id,
-        workspace_id: activeWorkspace.id,
-        name: name.trim(),
-        description: description.trim(),
-        visibility,
-        layout_type: 'full',
-        color,
-        icon: 'Layers',
-        sort_order: 0,
-        is_default: false,
-      });
+      createDivision(
+        {
+          period_id: activePeriod.id,
+          workspace_id: activeWorkspace.id,
+          name: name.trim(),
+          description: description.trim(),
+          visibility,
+          layout_type: 'full',
+          color,
+          icon: 'Layers',
+          sort_order: 0,
+          is_default: false,
+        },
+        template
+      );
     }
     onClose();
   };
@@ -506,7 +511,7 @@ export const DivisionModal: React.FC<DivisionModalProps> = ({
   return (
     <>
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 animate-in fade-in duration-150">
-        <div className="w-full max-w-md bg-white dark:bg-[#111827] rounded-2xl shadow-2xl border border-slate-200/90 dark:border-slate-800 p-5">
+        <div className="w-full max-w-lg bg-white dark:bg-[#111827] rounded-2xl shadow-2xl border border-slate-200/90 dark:border-slate-800 p-5 max-h-[90vh] overflow-y-auto">
           <div className="flex items-center justify-between pb-3 border-b border-slate-200/90 dark:border-slate-800">
             <div className="flex items-center gap-2">
               <Layers className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
@@ -550,6 +555,100 @@ export const DivisionModal: React.FC<DivisionModalProps> = ({
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a263d] text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 resize-none transition"
               />
             </div>
+
+            {/* If creating new division, select initial Board Mode & Clusters */}
+            {!divisionToEdit && (
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                  Khởi tạo Chế độ bảng & Cụm ban đầu
+                </label>
+                <div className="grid grid-cols-1 gap-2">
+                  <label
+                    className={`flex items-start gap-2.5 p-2.5 rounded-xl border cursor-pointer transition ${
+                      template === 'kanban_3'
+                        ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/40 text-indigo-900 dark:text-indigo-200'
+                        : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-[#152037] text-slate-700 dark:text-slate-300'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="template"
+                      value="kanban_3"
+                      checked={template === 'kanban_3'}
+                      onChange={() => setTemplate('kanban_3')}
+                      className="mt-0.5 text-indigo-600"
+                    />
+                    <div>
+                      <div className="font-bold">Kanban Tiến trình (3 cụm: Cần làm, Đang làm, Hoàn thành)</div>
+                      <div className="text-[11px] text-slate-400">Chuẩn hóa luồng công việc từ lúc nhận việc đến khi hoàn thành.</div>
+                    </div>
+                  </label>
+
+                  <label
+                    className={`flex items-start gap-2.5 p-2.5 rounded-xl border cursor-pointer transition ${
+                      template === 'cluster_3'
+                        ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/40 text-indigo-900 dark:text-indigo-200'
+                        : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-[#152037] text-slate-700 dark:text-slate-300'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="template"
+                      value="cluster_3"
+                      checked={template === 'cluster_3'}
+                      onChange={() => setTemplate('cluster_3')}
+                      className="mt-0.5 text-indigo-600"
+                    />
+                    <div>
+                      <div className="font-bold">Cụm phân loại chung (3 cụm: Cụm 1, Cụm 2, Cụm 3)</div>
+                      <div className="text-[11px] text-slate-400">Dễ dàng phân nhóm theo chủ đề hoặc danh mục tự do.</div>
+                    </div>
+                  </label>
+
+                  <label
+                    className={`flex items-start gap-2.5 p-2.5 rounded-xl border cursor-pointer transition ${
+                      template === 'weekday'
+                        ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/40 text-indigo-900 dark:text-indigo-200'
+                        : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-[#152037] text-slate-700 dark:text-slate-300'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="template"
+                      value="weekday"
+                      checked={template === 'weekday'}
+                      onChange={() => setTemplate('weekday')}
+                      className="mt-0.5 text-indigo-600"
+                    />
+                    <div>
+                      <div className="font-bold">Theo ngày trong tuần (Thứ 2 đến Chủ nhật)</div>
+                      <div className="text-[11px] text-slate-400">Phân chia công việc theo lịch trình ngày cụ thể.</div>
+                    </div>
+                  </label>
+
+                  <label
+                    className={`flex items-start gap-2.5 p-2.5 rounded-xl border cursor-pointer transition ${
+                      template === 'priority'
+                        ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/40 text-indigo-900 dark:text-indigo-200'
+                        : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-[#152037] text-slate-700 dark:text-slate-300'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="template"
+                      value="priority"
+                      checked={template === 'priority'}
+                      onChange={() => setTemplate('priority')}
+                      className="mt-0.5 text-indigo-600"
+                    />
+                    <div>
+                      <div className="font-bold">Mức độ ưu tiên (Khẩn cấp, Cao, Trung bình, Thấp)</div>
+                      <div className="text-[11px] text-slate-400">Quản lý theo mức độ quan trọng và độ ưu tiên thực hiện.</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            )}
 
             {/* Visibility Selector: Public vs Private */}
             <div>

@@ -26,6 +26,10 @@ interface SmartAreaViewProps {
   onMoveSingleTask: (task: Task) => void;
   onEditCluster: (cluster: Cluster) => void;
   onAddCluster: () => void;
+  tasksByClusterId?: Record<string, Task[]>;
+  onDropTaskInMode?: (taskId: string, targetClusterId: string) => void;
+  allowDeleteCluster?: boolean;
+  allowEditCluster?: boolean;
 }
 
 interface ClusterGeometry {
@@ -50,6 +54,10 @@ export const SmartAreaView: React.FC<SmartAreaViewProps> = ({
   onMoveSingleTask,
   onEditCluster,
   onAddCluster,
+  tasksByClusterId,
+  onDropTaskInMode,
+  allowDeleteCluster = true,
+  allowEditCluster = true,
 }) => {
   const { activeDivision } = useApp();
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -598,6 +606,10 @@ export const SmartAreaView: React.FC<SmartAreaViewProps> = ({
                       onDoubleClickTask={onDoubleClickTask}
                       onMoveSingleTask={onMoveSingleTask}
                       onEditCluster={onEditCluster}
+                      explicitTasks={tasksByClusterId ? tasksByClusterId[cluster.id] : undefined}
+                      onDropTaskInMode={onDropTaskInMode}
+                      allowDelete={allowDeleteCluster}
+                      allowEdit={allowEditCluster}
                       className="w-full h-full"
                     />
                   </div>

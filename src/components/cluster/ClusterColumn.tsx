@@ -7,7 +7,9 @@ import {
   CheckSquare,
   Trash2,
   Edit2,
-  FolderKanban
+  FolderKanban,
+  ClipboardPaste,
+  Link as LinkIcon,
 } from 'lucide-react';
 import { Cluster, Task } from '../../types';
 import { useApp } from '../../context/AppContext';
@@ -24,6 +26,13 @@ interface ClusterColumnProps {
   className?: string;
   style?: React.CSSProperties;
   taskLayout?: 'stack' | 'grid2' | 'grid3';
+  explicitTasks?: Task[];
+  modeId?: string;
+  onDropTaskInMode?: (taskId: string, targetClusterId: string) => void;
+  onReorderTaskInMode?: (sourceTaskId: string, targetTaskId: string, position: 'before' | 'after', clusterId: string) => void;
+  allowDelete?: boolean;
+  allowEdit?: boolean;
+  onDeleteCluster?: (clusterId: string) => void;
 }
 
 export const ClusterColumn: React.FC<ClusterColumnProps> = ({
@@ -36,6 +45,13 @@ export const ClusterColumn: React.FC<ClusterColumnProps> = ({
   className,
   style,
   taskLayout = 'stack',
+  explicitTasks,
+  modeId,
+  onDropTaskInMode,
+  onReorderTaskInMode,
+  allowDelete = true,
+  allowEdit = true,
+  onDeleteCluster,
 }) => {
   const {
     db,
@@ -45,6 +61,10 @@ export const ClusterColumn: React.FC<ClusterColumnProps> = ({
     toggleClusterCollapse,
     deleteCluster,
     moveTaskCluster,
+    reorderTaskInCluster,
+    moveTaskToEndOfCluster,
+    copiedTaskIds,
+    pasteTasks,
     searchQuery,
     filterAssignee,
     filterPriority,
@@ -56,38 +76,50 @@ export const ClusterColumn: React.FC<ClusterColumnProps> = ({
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
 
   // Filter tasks in cluster
-  const tasks = db.tasks.filter((t) => {
-    if (t.cluster_id !== cluster.id || t.is_archived) return false;
+  const candidateTasks = explicitTasks !== undefined
+    ? explicitTasks
+    : db.tasks.filter((t) => t.cluster_id === cluster.id && !t.is_archived);
 
-    // Search query
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const matchTitle = t.title.toLowerCase().includes(q);
-      const matchDesc = (t.description || '').toLowerCase().includes(q);
-      if (!matchTitle && !matchDesc) return false;
-    }
-
-    // Filter Assignee
-    if (filterAssignee !== 'all') {
-      if (filterAssignee === 'unassigned') {
-        if (t.assigned_to) return false;
-      } else {
-        if (t.assigned_to !== filterAssignee) return false;
+  const tasks = candidateTasks
+    .filter((t) => {
+      // Search query
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchTitle = t.title.toLowerCase().includes(q);
+        const matchDesc = (t.description || '').toLowerCase().includes(q);
+        if (!matchTitle && !matchDesc) return false;
       }
-    }
 
-    // Filter Priority
-    if (filterPriority !== 'all' && t.priority !== filterPriority) {
-      return false;
-    }
+      // Filter Assignee
+      if (filterAssignee !== 'all') {
+        if (filterAssignee === 'unassigned') {
+          if (t.assigned_to) return false;
+        } else {
+          if (t.assigned_to !== filterAssignee) return false;
+        }
+      }
 
-    // Filter Status
-    if (filterStatus !== 'all' && t.status !== filterStatus) {
-      return false;
-    }
+      // Filter Priority
+      if (filterPriority !== 'all' && t.priority !== filterPriority) {
+        return false;
+      }
 
-    return true;
-  });
+      // Filter Status
+      if (filterStatus !== 'all' && t.status !== filterStatus) {
+        return false;
+      }
+
+      return true;
+    })
+    .sort((a, b) => {
+      const orderA = (modeId && a.mode_sort_orders?.[modeId] !== undefined)
+        ? a.mode_sort_orders[modeId]
+        : (a.sort_order ?? 0);
+      const orderB = (modeId && b.mode_sort_orders?.[modeId] !== undefined)
+        ? b.mode_sort_orders[modeId]
+        : (b.sort_order ?? 0);
+      return orderA - orderB;
+    });
 
   // Drop handler
   const handleDragOver = (e: React.DragEvent) => {
@@ -104,14 +136,18 @@ export const ClusterColumn: React.FC<ClusterColumnProps> = ({
     setIsDragOver(false);
     const taskId = e.dataTransfer.getData('text/plain');
     if (taskId) {
-      moveTaskCluster(taskId, cluster.id);
+      if (onDropTaskInMode) {
+        onDropTaskInMode(taskId, cluster.id);
+      } else {
+        moveTaskToEndOfCluster(taskId, cluster.id);
+      }
     }
   };
 
-  const allClusterTasks = db.tasks.filter((t) => t.cluster_id === cluster.id && !t.is_archived);
+  const currentTaskIds = tasks.map((t) => t.id);
   const isAllSelected =
-    allClusterTasks.length > 0 &&
-    allClusterTasks.every((t) => selectedTaskIds.includes(t.id));
+    currentTaskIds.length > 0 &&
+    currentTaskIds.every((id) => selectedTaskIds.includes(id));
 
   return (
     <>
@@ -159,10 +195,10 @@ export const ClusterColumn: React.FC<ClusterColumnProps> = ({
           {/* Action Controls */}
           <div className="flex items-center gap-1">
             {/* Select all in cluster button */}
-            {allClusterTasks.length > 0 && (
+            {currentTaskIds.length > 0 && (
               <button
                 type="button"
-                onClick={() => toggleSelectAllInCluster(cluster.id)}
+                onClick={() => toggleSelectAllInCluster(cluster.id, currentTaskIds)}
                 className={`p-1 rounded-lg transition ${
                   isAllSelected
                     ? 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/50'
@@ -198,29 +234,62 @@ export const ClusterColumn: React.FC<ClusterColumnProps> = ({
                 <>
                   <div className="fixed inset-0 z-20" onClick={() => setIsMenuOpen(false)} />
                   <div className="absolute right-0 top-full mt-1 z-30 w-40 rounded-xl bg-white dark:bg-[#131b2e] border border-slate-200/90 dark:border-slate-800 shadow-xl py-1 text-xs animate-in fade-in zoom-in-95">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsMenuOpen(false);
-                        onEditCluster(cluster);
-                      }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 text-left transition"
-                    >
-                      <Edit2 className="w-3.5 h-3.5 text-indigo-500" />
-                      <span>Sửa cụm</span>
-                    </button>
+                    {allowEdit && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsMenuOpen(false);
+                          onEditCluster(cluster);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 text-left transition"
+                      >
+                        <Edit2 className="w-3.5 h-3.5 text-indigo-500" />
+                        <span>Sửa cụm</span>
+                      </button>
+                    )}
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsMenuOpen(false);
-                        setIsDeleteConfirmOpen(true);
-                      }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 text-left transition"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Xóa cụm</span>
-                    </button>
+                    {copiedTaskIds.length > 0 && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsMenuOpen(false);
+                            pasteTasks(cluster.id, { inherit: false });
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 text-left transition"
+                        >
+                          <ClipboardPaste className="w-3.5 h-3.5 text-emerald-500" />
+                          <span>Dán {copiedTaskIds.length} Task (Độc lập)</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsMenuOpen(false);
+                            pasteTasks(cluster.id, { inherit: true });
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-950/30 text-left transition font-medium"
+                          title="Task dán sẽ tự động cập nhật nội dung và báo thức khi task gốc thay đổi"
+                        >
+                          <LinkIcon className="w-3.5 h-3.5 text-purple-500" />
+                          <span>Dán Task (Có kế thừa)</span>
+                        </button>
+                      </>
+                    )}
+
+                    {allowDelete && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsMenuOpen(false);
+                          setIsDeleteConfirmOpen(true);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 text-left transition"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Xóa cụm</span>
+                      </button>
+                    )}
                   </div>
                 </>
               )}
@@ -268,6 +337,14 @@ export const ClusterColumn: React.FC<ClusterColumnProps> = ({
                   onDoubleClick={onDoubleClickTask}
                   onEdit={onEditTask}
                   onMoveRequest={onMoveSingleTask}
+                  currentClusterId={cluster.id}
+                  onReorder={(sourceId, targetId, pos) => {
+                    if (onReorderTaskInMode) {
+                      onReorderTaskInMode(sourceId, targetId, pos, cluster.id);
+                    } else {
+                      reorderTaskInCluster(cluster.id, sourceId, targetId, pos);
+                    }
+                  }}
                 />
               ))
             )}
@@ -279,9 +356,16 @@ export const ClusterColumn: React.FC<ClusterColumnProps> = ({
       <ConfirmModal
         isOpen={isDeleteConfirmOpen}
         title="Xác nhận xóa cụm công việc"
-        message={`Bạn có chắc muốn xóa cụm "${cluster.name}" cùng tất cả các công việc bên trong không? Thao tác này không thể hoàn tác.`}
+        message={`Bạn có chắc muốn xóa cụm "${cluster.name}" không? Thao tác này sẽ gỡ cụm/cột này ra khỏi chế độ hiển thị.`}
         confirmText="Xác nhận xóa"
-        onConfirm={() => deleteCluster(cluster.id)}
+        onConfirm={() => {
+          if (onDeleteCluster) {
+            onDeleteCluster(cluster.id);
+          } else {
+            deleteCluster(cluster.id);
+          }
+          setIsDeleteConfirmOpen(false);
+        }}
         onCancel={() => setIsDeleteConfirmOpen(false)}
       />
     </>

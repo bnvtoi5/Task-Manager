@@ -50,3 +50,80 @@
 .badge-nowrap {
   white-space: nowrap;
 }
+
+/* Warm / Book Paper Theme - Gentle, soothing natural paper aesthetic */
+html.theme-warm-book {
+  color-scheme: light;
+}
+html.theme-warm-book body {
+  background-color: #f7f4eb !important;
+  color: #2e332d !important;
+}
+html.theme-warm-book .bg-white,
+html.theme-warm-book .bg-slate-50,
+html.theme-warm-book .bg-neutral-50,
+html.theme-warm-book .bg-slate-100\/60,
+html.theme-warm-book .bg-slate-100\/90 {
+  background-color: #fffdf9 !important;
+}
+html.theme-warm-book .bg-slate-100,
+html.theme-warm-book .bg-slate-200\/70,
+html.theme-warm-book .bg-slate-200\/80 {
+  background-color: #f0ebe0 !important;
+}
+html.theme-warm-book .border-slate-200,
+html.theme-warm-book .border-neutral-200,
+html.theme-warm-book .border-slate-200\/80,
+html.theme-warm-book .border-slate-200\/90,
+html.theme-warm-book .border-slate-300\/70 {
+  border-color: #e8e1d3 !important;
+}
+html.theme-warm-book .text-slate-900,
+html.theme-warm-book .text-neutral-900 {
+  color: #2e332d !important;
+}
+html.theme-warm-book .text-slate-700,
+html.theme-warm-book .text-slate-600 {
+  color: #4b5249 !important;
+}
+html.theme-warm-book .text-slate-500,
+html.theme-warm-book .text-slate-400 {
+  color: #72786e !important;
+}
+html.theme-warm-book .bg-indigo-600,
+html.theme-warm-book .bg-blue-600 {
+  background-color: #248a5b !important;
+}
+html.theme-warm-book .hover\:bg-indigo-700:hover,
+html.theme-warm-book .hover\:bg-blue-700:hover {
+  background-color: #1e754d !important;
+}
+html.theme-warm-book .text-indigo-600,
+html.theme-warm-book .text-blue-600 {
+  color: #248a5b !important;
+}
+html.theme-warm-book .bg-indigo-50,
+html.theme-warm-book .bg-indigo-50\/80 {
+  background-color: #ebf5ee !important;
+}
+html.theme-warm-book .border-indigo-200 {
+  border-color: #c9e5d4 !important;
+}
+
+/* Neon Cyberpunk Theme */
+html.theme-neon {
+  color-scheme: dark;
+}
+html.theme-neon body {
+  background-color: #070913 !important;
+  color: #e2f1ff !important;
+}
+html.theme-neon .dark\:border-slate-800,
+html.theme-neon .dark\:border-neutral-800 {
+  border-color: rgba(56, 189, 248, 0.3) !important;
+}
+html.theme-neon .dark\:bg-indigo-600,
+html.theme-neon .bg-blue-600 {
+  background-color: #0284c7 !important;
+  box-shadow: 0 0 12px rgba(2, 132, 199, 0.5) !important;
+}
