@@ -57,7 +57,9 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({ isOpen, onClose })
 
   // Default tab is 'rollback' as requested by user!
   const [activeTab, setActiveTab] = useState<'rollback' | 'snapshots' | 'io' | 'settings'>('rollback');
-  const [rollbackScope, setRollbackScope] = useState<'all' | 'workspace'>('all');
+  const [rollbackScope, setRollbackScope] = useState<'all' | 'workspace'>(
+    currentWorkspaceId ? 'workspace' : 'all'
+  );
   const [rollbackSearch, setRollbackSearch] = useState('');
 
   // Manual Rollback Checkpoint Creation Form
@@ -104,6 +106,12 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({ isOpen, onClose })
   }, [db.restore_points]);
 
   // Filtered restore points
+  const workspacePointsCount = useMemo(() => {
+    return allRestorePoints.filter(
+      (rp) => !currentWorkspaceId || !rp.workspace_id || rp.workspace_id === currentWorkspaceId
+    ).length;
+  }, [allRestorePoints, currentWorkspaceId]);
+
   const filteredRestorePoints = useMemo(() => {
     return allRestorePoints.filter((rp) => {
       // Scope filter
@@ -190,12 +198,14 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({ isOpen, onClose })
     try {
       const parsed = JSON.parse(pointToRollbackSelective.data_state) as DatabaseState;
       const divs = parsed.divisions || [];
+      const targetWsId = pointToRollbackSelective.workspace_id || currentWorkspaceId;
       return divs
-        .filter(
-          (d) =>
-            d.visibility === 'public' ||
-            (d.visibility === 'private' && currentUser && d.owner_id === currentUser.id)
-        )
+        .filter((d) => {
+          if (targetWsId && d.workspace_id && d.workspace_id !== targetWsId) return false;
+          if (d.visibility === 'public') return true;
+          if (d.visibility === 'private' && currentUser && d.owner_id === currentUser.id) return true;
+          return false;
+        })
         .map((d) => {
           const clustersCount = (parsed.clusters || []).filter((c) => c.division_id === d.id).length;
           const tasksCount = (parsed.tasks || []).filter((t) => t.division_id === d.id).length;
@@ -211,7 +221,7 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({ isOpen, onClose })
     } catch {
       return [];
     }
-  }, [pointToRollbackSelective, currentUser]);
+  }, [pointToRollbackSelective, currentUser, currentWorkspaceId]);
 
   // Open selective rollback
   const handleOpenSelectiveRollback = (item: RestorePoint | DatabaseSnapshot) => {
@@ -219,11 +229,14 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({ isOpen, onClose })
     try {
       const parsed = JSON.parse(item.data_state) as DatabaseState;
       const divs = parsed.divisions || [];
-      const permitted = divs.filter(
-        (d) =>
+      const targetWsId = item.workspace_id || currentWorkspaceId;
+      const permitted = divs.filter((d) => {
+        if (targetWsId && d.workspace_id && d.workspace_id !== targetWsId) return false;
+        return (
           d.visibility === 'public' ||
           (d.visibility === 'private' && currentUser && d.owner_id === currentUser.id)
-      );
+        );
+      });
       if (permitted.length > 0) {
         setSelectedDivisionIdsToRollback(permitted.map((d) => d.id));
       } else {
@@ -508,17 +521,6 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({ isOpen, onClose })
                   <div className="flex items-center bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-0.5 shrink-0 text-xs">
                     <button
                       type="button"
-                      onClick={() => setRollbackScope('all')}
-                      className={`px-2.5 py-1 rounded-lg font-semibold transition ${
-                        rollbackScope === 'all'
-                          ? 'bg-indigo-600 text-white'
-                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                      }`}
-                    >
-                      Tất cả ({allRestorePoints.length})
-                    </button>
-                    <button
-                      type="button"
                       onClick={() => setRollbackScope('workspace')}
                       className={`px-2.5 py-1 rounded-lg font-semibold transition ${
                         rollbackScope === 'workspace'
@@ -526,7 +528,18 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({ isOpen, onClose })
                           : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
                       }`}
                     >
-                      Phòng hiện tại
+                      Phòng hiện tại ({workspacePointsCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRollbackScope('all')}
+                      className={`px-2.5 py-1 rounded-lg font-semibold transition ${
+                        rollbackScope === 'all'
+                          ? 'bg-indigo-600 text-white'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                      }`}
+                    >
+                      Tất cả phòng ({allRestorePoints.length})
                     </button>
                   </div>
                 </div>
@@ -635,6 +648,7 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({ isOpen, onClose })
                 <div className="space-y-2.5">
                   {filteredRestorePoints.map((rp) => {
                     const badge = getActionBadge(rp.action_type);
+                    const pointWs = rp.workspace_id ? db.workspaces.find((w) => w.id === rp.workspace_id) : null;
                     return (
                       <div
                         key={rp.id}
@@ -648,6 +662,15 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({ isOpen, onClose })
                               >
                                 {badge.label}
                               </span>
+                              {pointWs ? (
+                                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200/70 dark:border-indigo-800/60">
+                                  Phòng: {pointWs.name}
+                                </span>
+                              ) : rp.workspace_id ? (
+                                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300 border border-slate-200/70 dark:border-slate-700">
+                                  Phòng này
+                                </span>
+                              ) : null}
                               <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
                                 {rp.name}
                               </span>
@@ -1098,6 +1121,16 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({ isOpen, onClose })
 
               <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs space-y-2">
                 <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Phòng áp dụng:</span>
+                  <span className="font-bold text-indigo-600 dark:text-indigo-400">
+                    {pointToRollbackFull.workspace_id
+                      ? db.workspaces.find((w) => w.id === pointToRollbackFull.workspace_id)?.name ||
+                        activeWorkspace?.name ||
+                        'Phòng này'
+                      : activeWorkspace?.name || 'Phòng hiện tại'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
                   <span className="text-slate-500">Thời điểm lưu:</span>
                   <span className="font-semibold text-slate-800 dark:text-slate-200">
                     {new Date(pointToRollbackFull.created_at).toLocaleString('vi-VN')}
@@ -1111,7 +1144,7 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({ isOpen, onClose })
                 </div>
                 <div className="pt-2 border-t border-slate-200/70 dark:border-slate-800 text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5 font-medium">
                   <ShieldCheck className="w-4 h-4 shrink-0" />
-                  <span>Một điểm an toàn trước khi khôi phục sẽ tự động được lưu lại để bạn có thể hoàn tác lại bất cứ lúc nào.</span>
+                  <span>Cô lập dữ liệu: Các phòng ban khác được bảo toàn 100%. Hệ thống sẽ tự động lưu điểm an toàn của phòng này trước khi khôi phục.</span>
                 </div>
               </div>
 

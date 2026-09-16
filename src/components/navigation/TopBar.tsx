@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Menu,
   Search,
@@ -97,6 +97,20 @@ export const TopBar: React.FC<TopBarProps> = ({
 
   const hasActiveFilters =
     filterAssignee !== 'all' || filterPriority !== 'all' || filterStatus !== 'all';
+
+  // Count rollback points & snapshots for the active workspace (resets accurately when switching rooms)
+  const workspaceRollbackCount = useMemo(() => {
+    if (!activeWorkspace?.id) {
+      return (db.restore_points || []).length + (db.snapshots || []).length;
+    }
+    const currentWsPoints = (db.restore_points || []).filter(
+      (rp) => rp.workspace_id === activeWorkspace.id
+    ).length;
+    const currentWsSnapshots = (db.snapshots || []).filter(
+      (s) => s.workspace_id === activeWorkspace.id
+    ).length;
+    return currentWsPoints + currentWsSnapshots;
+  }, [db.restore_points, db.snapshots, activeWorkspace?.id]);
 
   const handleConfirmDeleteWorkspace = () => {
     if (workspaceToDelete) {
@@ -432,12 +446,12 @@ export const TopBar: React.FC<TopBarProps> = ({
             type="button"
             onClick={() => setIsSnapshotModalOpen(true)}
             className="p-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition relative"
-            title="Trung tâm Rollback & Khôi phục (Snapshots & Rollback)"
+            title={`Trung tâm Rollback & Khôi phục (${workspaceRollbackCount} điểm lưu tại ${activeWorkspace?.name || 'phòng này'})`}
           >
             <RotateCcw className="w-4 h-4 text-indigo-500" />
-            {((db.restore_points || []).length > 0 || (db.snapshots || []).length > 0) && (
+            {workspaceRollbackCount > 0 && (
               <span className="absolute -top-0.5 -right-0.5 text-[9px] font-bold px-1 rounded-full bg-indigo-100 dark:bg-indigo-900/80 text-indigo-700 dark:text-indigo-300">
-                {(db.restore_points || []).length + (db.snapshots || []).length}
+                {workspaceRollbackCount}
               </span>
             )}
           </button>

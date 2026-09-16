@@ -894,19 +894,57 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     actionType: string = 'general',
     customDbState?: DatabaseState
   ): RestorePoint => {
-    const stateToSave = customDbState || db;
-    const ws = stateToSave.workspaces.find((w) => w.id === activeWorkspaceId);
-    const tasksCount = (stateToSave.tasks || []).length;
-    const divisionsCount = (stateToSave.divisions || []).length;
-    const clustersCount = (stateToSave.clusters || []).length;
+    const baseState = customDbState || db;
+    const wsId = activeWorkspaceId;
+    const ws = baseState.workspaces.find((w) => w.id === wsId);
+
+    // CRITICAL: Scope strictly to the CURRENT workspace/room (phòng hiện tại)
+    // NEVER save or include other rooms' data in the rollback checkpoint!
+    const workspaceDivisions = (baseState.divisions || []).filter((d) => !wsId || d.workspace_id === wsId);
+    const allowedDivisions = workspaceDivisions.filter((d) => {
+      if (d.visibility === 'public') return true;
+      if (d.visibility === 'private' && currentUser && d.owner_id === currentUser.id) return true;
+      return false;
+    });
+
+    const targetDivisionIdSet = new Set(allowedDivisions.map((d) => d.id));
+    const periodIdSet = new Set(allowedDivisions.map((d) => d.period_id).filter(Boolean));
+    const savedPeriods = (baseState.periods || []).filter(
+      (p) => periodIdSet.has(p.id) || (wsId && p.workspace_id === wsId)
+    );
+    const savedClusters = (baseState.clusters || []).filter((c) => targetDivisionIdSet.has(c.division_id));
+    const savedClusterIdSet = new Set(savedClusters.map((c) => c.id));
+    const savedTasks = (baseState.tasks || []).filter((t) => targetDivisionIdSet.has(t.division_id));
+    const savedBoardModes = (baseState.board_modes || []).filter(
+      (m) => m.division_id && targetDivisionIdSet.has(m.division_id)
+    );
+    const savedSmartAreaItems = (baseState.smart_area_items || []).filter((item) =>
+      savedClusterIdSet.has(item.cluster_id)
+    );
+    const savedWorkspaces = wsId ? baseState.workspaces.filter((w) => w.id === wsId) : baseState.workspaces;
+
+    const scopedStateToSave: DatabaseState = {
+      ...baseState,
+      workspaces: savedWorkspaces,
+      periods: savedPeriods,
+      divisions: allowedDivisions,
+      clusters: savedClusters,
+      tasks: savedTasks,
+      board_modes: savedBoardModes,
+      smart_area_items: savedSmartAreaItems,
+    };
+
+    const tasksCount = savedTasks.length;
+    const divisionsCount = allowedDivisions.length;
+    const clustersCount = savedClusters.length;
 
     const newPoint: RestorePoint = {
       id: `rb-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      workspace_id: activeWorkspaceId || null,
+      workspace_id: wsId || null,
       name,
       description:
         description ||
-        `Trạng thái tự động trước thao tác (${tasksCount} công việc, ${divisionsCount} phân chia tại ${ws?.name || 'Hệ thống'})`,
+        `Trạng thái tự động trước thao tác (${tasksCount} công việc, ${divisionsCount} phân chia tại ${ws?.name || 'phòng hiện tại'})`,
       action_type: actionType,
       created_by: currentUser?.id || 'system',
       created_by_name: currentUser?.display_name || 'Hệ thống',
@@ -916,7 +954,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         clusters_count: clustersCount,
         divisions_count: divisionsCount,
       },
-      data_state: JSON.stringify(stateToSave),
+      data_state: JSON.stringify(scopedStateToSave),
     };
 
     setDb((prev) => {
@@ -2100,53 +2138,151 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     try {
       const parsed = JSON.parse(source.data_state) as DatabaseState;
+      const targetWsId = source.workspace_id || activeWorkspaceId;
+      const targetWs = (db.workspaces || []).find((w) => w.id === targetWsId);
+      const targetWsName = targetWs?.name || 'phòng hiện tại';
 
-      // Automatically create a SAFETY Checkpoint of current DB before applying rollback!
+      // Automatically create a SAFETY Checkpoint of current DB before applying rollback, scoped strictly to targetWsId!
+      const currentWsDivs = (db.divisions || []).filter((d) => !targetWsId || d.workspace_id === targetWsId);
+      const currentWsDivIdSet = new Set(currentWsDivs.map((d) => d.id));
+      const currentWsClusters = (db.clusters || []).filter((c) => currentWsDivIdSet.has(c.division_id));
+      const currentWsClusterIdSet = new Set(currentWsClusters.map((c) => c.id));
+      const currentWsTasks = (db.tasks || []).filter((t) => currentWsDivIdSet.has(t.division_id));
+      const currentWsPeriods = (db.periods || []).filter((p) => !targetWsId || p.workspace_id === targetWsId);
+      const currentWsBoardModes = (db.board_modes || []).filter((m) => m.division_id && currentWsDivIdSet.has(m.division_id));
+      const currentWsSmartAreas = (db.smart_area_items || []).filter((item) => currentWsClusterIdSet.has(item.cluster_id));
+
+      const scopedSafetyDb: DatabaseState = {
+        ...db,
+        workspaces: targetWsId ? (db.workspaces || []).filter((w) => w.id === targetWsId) : db.workspaces,
+        periods: currentWsPeriods,
+        divisions: currentWsDivs,
+        clusters: currentWsClusters,
+        tasks: currentWsTasks,
+        board_modes: currentWsBoardModes,
+        smart_area_items: currentWsSmartAreas,
+      };
+
       const safetyPoint: RestorePoint = {
         id: `rb-safety-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-        workspace_id: activeWorkspaceId || null,
+        workspace_id: targetWsId || null,
         name: `Điểm an toàn trước khi Rollback về "${source.name}"`,
-        description: `Tự động lưu trạng thái trước khi khôi phục để bạn có thể quay lại bất cứ lúc nào`,
+        description: `Tự động lưu trạng thái phòng ${targetWsName} trước khi khôi phục để bạn có thể hoàn tác bất cứ lúc nào`,
         action_type: 'safety',
         created_by: currentUser?.id || 'system',
         created_by_name: currentUser?.display_name || 'Hệ thống',
         created_at: new Date().toISOString(),
         stats: {
-          tasks_count: (db.tasks || []).length,
-          clusters_count: (db.clusters || []).length,
-          divisions_count: (db.divisions || []).length,
+          tasks_count: currentWsTasks.length,
+          clusters_count: currentWsClusters.length,
+          divisions_count: currentWsDivs.length,
         },
-        data_state: JSON.stringify(db),
+        data_state: JSON.stringify(scopedSafetyDb),
       };
 
-      if (mode === 'full') {
-        const updatedRestorePoints = [safetyPoint, ...(db.restore_points || [])].slice(0, 60);
+      const updatedRestorePoints = [safetyPoint, ...(db.restore_points || [])].slice(0, 60);
 
-        const targetWorkspaces = parsed.workspaces || [];
-        const targetMembers = parsed.workspace_members || [];
-        const targetPeriods = parsed.periods || [];
-        const targetDivisions = parsed.divisions || [];
-        const targetClusters = parsed.clusters || [];
-        const targetTasks = parsed.tasks || [];
-        const targetSmartAreas = parsed.smart_areas || [];
-        const targetSmartAreaItems = parsed.smart_area_items || [];
-        const targetBoardModes = parsed.board_modes && parsed.board_modes.length > 0 ? parsed.board_modes : db.board_modes;
+      // CRITICAL: KEEP ALL OTHER ROOMS (PHÒNG KHÁC) 100% UNTOUCHED!
+      // Other rooms' divisions, clusters, tasks, periods, board modes will NEVER be modified or erased!
+      const isOtherDivision = (d: Division) => Boolean(targetWsId && d.workspace_id && d.workspace_id !== targetWsId);
+      const otherDivisions = (db.divisions || []).filter(isOtherDivision);
+      const otherDivisionIdSet = new Set(otherDivisions.map((d) => d.id));
+      const otherClusters = (db.clusters || []).filter((c) => otherDivisionIdSet.has(c.division_id));
+      const otherClusterIdSet = new Set(otherClusters.map((c) => c.id));
+      const otherTasks = (db.tasks || []).filter((t) => otherDivisionIdSet.has(t.division_id));
+      const otherPeriods = (db.periods || []).filter((p) => Boolean(targetWsId && p.workspace_id && p.workspace_id !== targetWsId));
+      const otherBoardModes = (db.board_modes || []).filter((m) => m.division_id && otherDivisionIdSet.has(m.division_id));
+      const otherSmartAreaItems = (db.smart_area_items || []).filter((item) => otherClusterIdSet.has(item.cluster_id));
+
+      if (mode === 'full') {
+        // Also preserve private divisions owned by other users in THIS room (targetWsId)
+        // so Alice's rollback does not delete Bob's private divisions
+        const otherUsersPrivateDivsInThisRoom = (db.divisions || []).filter(
+          (d) =>
+            (!targetWsId || d.workspace_id === targetWsId) &&
+            d.visibility === 'private' &&
+            currentUser &&
+            d.owner_id !== currentUser.id
+        );
+        const otherUsersPrivateDivIdSet = new Set(otherUsersPrivateDivsInThisRoom.map((d) => d.id));
+        const otherUsersPrivateClusters = (db.clusters || []).filter((c) =>
+          otherUsersPrivateDivIdSet.has(c.division_id)
+        );
+        const otherUsersPrivateClusterIdSet = new Set(otherUsersPrivateClusters.map((c) => c.id));
+        const otherUsersPrivateTasks = (db.tasks || []).filter((t) =>
+          otherUsersPrivateDivIdSet.has(t.division_id)
+        );
+        const otherUsersPrivateBoardModes = (db.board_modes || []).filter(
+          (m) => m.division_id && otherUsersPrivateDivIdSet.has(m.division_id)
+        );
+        const otherUsersPrivateSmartAreaItems = (db.smart_area_items || []).filter((item) =>
+          otherUsersPrivateClusterIdSet.has(item.cluster_id)
+        );
+
+        // Divisions to restore for targetWsId from parsed data:
+        // Must match targetWsId (or if source/parsed has no workspace_id, assign targetWsId)
+        // Only public divisions OR current user's private divisions
+        const parsedTargetDivs = (parsed.divisions || [])
+          .filter((d) => {
+            if (targetWsId && d.workspace_id && d.workspace_id !== targetWsId) return false;
+            if (d.visibility === 'private' && currentUser && d.owner_id !== currentUser.id) return false;
+            return true;
+          })
+          .map((d) => ({
+            ...d,
+            workspace_id: d.workspace_id || targetWsId || undefined,
+          }));
+
+        const parsedTargetDivIdSet = new Set(parsedTargetDivs.map((d) => d.id));
+        const parsedTargetClusters = (parsed.clusters || []).filter((c) =>
+          parsedTargetDivIdSet.has(c.division_id)
+        );
+        const parsedTargetClusterIdSet = new Set(parsedTargetClusters.map((c) => c.id));
+        const parsedTargetTasks = (parsed.tasks || []).filter((t) => parsedTargetDivIdSet.has(t.division_id));
+        const parsedTargetBoardModes = (parsed.board_modes || []).filter(
+          (m) => m.division_id && parsedTargetDivIdSet.has(m.division_id)
+        );
+        const parsedTargetSmartAreaItems = (parsed.smart_area_items || []).filter((item) =>
+          parsedTargetClusterIdSet.has(item.cluster_id)
+        );
+
+        // Periods to restore for targetWsId
+        const parsedTargetPeriods = (parsed.periods || [])
+          .filter((p) => !targetWsId || !p.workspace_id || p.workspace_id === targetWsId)
+          .map((p) => ({
+            ...p,
+            workspace_id: p.workspace_id || targetWsId || undefined,
+          }));
+
+        // Merge: keep all other rooms + keep colleagues' private divisions in this room + restore target divs/tasks/periods
+        const finalDivisions = [...otherDivisions, ...otherUsersPrivateDivsInThisRoom, ...parsedTargetDivs];
+        const finalClusters = [...otherClusters, ...otherUsersPrivateClusters, ...parsedTargetClusters];
+        const finalTasks = [...otherTasks, ...otherUsersPrivateTasks, ...parsedTargetTasks];
+        const finalBoardModes = [...otherBoardModes, ...otherUsersPrivateBoardModes, ...parsedTargetBoardModes];
+        const finalSmartAreaItems = [
+          ...otherSmartAreaItems,
+          ...otherUsersPrivateSmartAreaItems,
+          ...parsedTargetSmartAreaItems,
+        ];
+
+        const otherPeriodIdSet = new Set(otherPeriods.map((p) => p.id));
+        const finalPeriods = [...otherPeriods, ...parsedTargetPeriods.filter((p) => !otherPeriodIdSet.has(p.id))];
 
         const restoredState: DatabaseState = {
-          ...parsed,
+          ...db,
           users: db.users, // preserve accounts
           settings: db.settings,
           restore_points: updatedRestorePoints,
           snapshots: db.snapshots, // preserve all snapshots
-          workspaces: targetWorkspaces,
-          workspace_members: targetMembers,
-          periods: targetPeriods,
-          divisions: targetDivisions,
-          clusters: targetClusters,
-          tasks: targetTasks,
-          smart_areas: targetSmartAreas,
-          smart_area_items: targetSmartAreaItems,
-          board_modes: targetBoardModes,
+          workspaces: db.workspaces, // preserve all workspaces
+          workspace_members: db.workspace_members,
+          periods: finalPeriods,
+          divisions: finalDivisions,
+          clusters: finalClusters,
+          tasks: finalTasks,
+          smart_areas: db.smart_areas,
+          smart_area_items: finalSmartAreaItems,
+          board_modes: finalBoardModes,
         };
 
         setDb(restoredState);
@@ -2154,37 +2290,42 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         saveToFirestore(restoredState).catch(() => {});
 
         // Adjust active workspace/period/division pointers if needed
-        if (targetWorkspaces.length > 0) {
-          const matchedWs = targetWorkspaces.find((w) => w.id === activeWorkspaceId) || targetWorkspaces[0];
-          setActiveWorkspaceId(matchedWs.id);
-          const wsPeriods = targetPeriods.filter((p) => p.workspace_id === matchedWs.id);
-          if (wsPeriods.length > 0) {
-            setActivePeriodId(wsPeriods[0].id);
-            const pDivs = targetDivisions.filter((d) => d.period_id === wsPeriods[0].id);
-            if (pDivs.length > 0) {
-              setActiveDivisionId(pDivs[0].id);
-            }
+        if (targetWsId) {
+          setActiveWorkspaceId(targetWsId);
+        }
+        if (parsedTargetDivs.length > 0) {
+          const firstDiv = parsedTargetDivs[0];
+          setActiveDivisionId(firstDiv.id);
+          if (firstDiv.period_id) {
+            setActivePeriodId(firstDiv.period_id);
           }
         }
 
-        logActivity(activeWorkspaceId || undefined, 'Khôi phục Toàn bộ (Rollback)', 'workspace', source.id, {
+        logActivity(targetWsId || undefined, 'Khôi phục Toàn bộ (Rollback)', 'workspace', source.id, {
           source_name: source.name,
           mode: 'full',
-          tasks_restored: targetTasks.length,
-          divisions_restored: targetDivisions.length,
+          workspace_name: targetWsName,
+          tasks_restored: parsedTargetTasks.length,
+          divisions_restored: parsedTargetDivs.length,
         });
 
         return {
           success: true,
-          message: `Khôi phục (Rollback) toàn bộ thành công về "${source.name}"! Điểm an toàn trước khi khôi phục đã được lưu lại để có thể hoàn tác bất kỳ lúc nào.`,
+          message: `Khôi phục (Rollback) thành công cho phòng "${targetWsName}" về bản "${source.name}"! (${parsedTargetDivs.length} phân chia, ${parsedTargetTasks.length} việc). Các phòng ban khác vẫn được giữ nguyên vẹn 100%.`,
         };
       } else {
-        // Selective rollback for divisions
+        // Selective rollback for divisions in targetWsId
         if (!selectedDivisionIds || selectedDivisionIds.length === 0) {
           return { success: false, message: 'Vui lòng chọn ít nhất 1 phân chia để khôi phục.' };
         }
 
-        const targetDivs = (parsed.divisions || []).filter((d) => selectedDivisionIds.includes(d.id));
+        const targetDivs = (parsed.divisions || [])
+          .filter((d) => selectedDivisionIds.includes(d.id))
+          .map((d) => ({
+            ...d,
+            workspace_id: d.workspace_id || targetWsId || undefined,
+          }));
+
         if (targetDivs.length === 0) {
           return { success: false, message: 'Các phân chia đã chọn không tồn tại trong bản lưu này.' };
         }
@@ -2200,25 +2341,35 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           restoredClusterIds.has(item.cluster_id)
         );
 
-        const otherDivisions = db.divisions.filter((d) => !validDivisionIdSet.has(d.id));
-        const otherClusters = db.clusters.filter((c) => !validDivisionIdSet.has(c.division_id));
-        const otherTasks = db.tasks.filter((t) => !validDivisionIdSet.has(t.division_id));
-        const otherBoardModes = (db.board_modes || []).filter(
+        // Keep all existing divisions that are NOT in validDivisionIdSet (including all other rooms AND other divisions of this room)
+        const unaffectedDivisions = db.divisions.filter((d) => !validDivisionIdSet.has(d.id));
+        const unaffectedClusters = db.clusters.filter((c) => !validDivisionIdSet.has(c.division_id));
+        const unaffectedTasks = db.tasks.filter((t) => !validDivisionIdSet.has(t.division_id));
+        const unaffectedBoardModes = (db.board_modes || []).filter(
           (m) => !m.division_id || !validDivisionIdSet.has(m.division_id)
         );
-        const otherSmartAreaItems = (db.smart_area_items || []).filter(
+        const unaffectedSmartAreaItems = (db.smart_area_items || []).filter(
           (item) => !restoredClusterIds.has(item.cluster_id)
         );
 
-        const updatedRestorePoints = [safetyPoint, ...(db.restore_points || [])].slice(0, 60);
+        // Bring over any periods referenced by restored targetDivs if missing
+        const referencedPeriodIds = new Set(targetDivs.map((d) => d.period_id).filter(Boolean));
+        const existingPeriodIds = new Set(db.periods.map((p) => p.id));
+        const missingPeriods = (parsed.periods || [])
+          .filter((p) => referencedPeriodIds.has(p.id) && !existingPeriodIds.has(p.id))
+          .map((p) => ({
+            ...p,
+            workspace_id: p.workspace_id || targetWsId || undefined,
+          }));
 
         const updatedState: DatabaseState = {
           ...db,
-          divisions: [...otherDivisions, ...targetDivs],
-          clusters: [...otherClusters, ...restoredClusters],
-          tasks: [...otherTasks, ...restoredTasks],
-          board_modes: [...otherBoardModes, ...restoredBoardModes],
-          smart_area_items: [...otherSmartAreaItems, ...restoredSmartAreaItems],
+          divisions: [...unaffectedDivisions, ...targetDivs],
+          clusters: [...unaffectedClusters, ...restoredClusters],
+          tasks: [...unaffectedTasks, ...restoredTasks],
+          board_modes: [...unaffectedBoardModes, ...restoredBoardModes],
+          smart_area_items: [...unaffectedSmartAreaItems, ...restoredSmartAreaItems],
+          periods: [...db.periods, ...missingPeriods],
           restore_points: updatedRestorePoints,
         };
 
@@ -2232,7 +2383,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           if (targetDivs[0].workspace_id) setActiveWorkspaceId(targetDivs[0].workspace_id);
         }
 
-        logActivity(activeWorkspaceId || undefined, 'Khôi phục Phân chia (Rollback)', 'workspace', source.id, {
+        logActivity(targetWsId || undefined, 'Khôi phục Phân chia (Rollback)', 'workspace', source.id, {
           source_name: source.name,
           mode: 'selective',
           divisions_restored: targetDivs.length,
@@ -2241,7 +2392,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
         return {
           success: true,
-          message: `Đã khôi phục thành công ${targetDivs.length} phân chia (${targetDivs.map((d) => d.name).join(', ')})!`,
+          message: `Đã khôi phục thành công ${targetDivs.length} phân chia (${targetDivs.map((d) => d.name).join(', ')}) tại phòng "${targetWsName}"! Các phòng ban khác không bị ảnh hưởng.`,
         };
       }
     } catch (err: any) {
