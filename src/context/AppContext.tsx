@@ -25,6 +25,7 @@ import {
   BoardMode,
   BoardModeCluster,
   RestorePoint,
+  TaskChecklistItem,
 } from '../types';
 import { loadDatabase, saveDatabase, DatabaseState, resetToEmptyDatabase } from '../services/storage';
 import { playAlarmSound, sendBrowserNotification } from '../services/alarm';
@@ -53,7 +54,12 @@ interface AppContextType {
   // Custom Board Modes (Perspectives)
   activeBoardModeId: string;
   setActiveBoardModeId: (id: string) => void;
-  createBoardMode: (name: string, description?: string, clusters?: BoardModeCluster[]) => BoardMode;
+  createBoardMode: (
+    name: string,
+    description?: string,
+    clusters?: BoardModeCluster[],
+    targetDivisionId?: string
+  ) => BoardMode;
   updateBoardMode: (modeId: string, updates: Partial<BoardMode>) => void;
   deleteBoardMode: (modeId: string) => void;
   addColumnToBoardMode: (modeId: string, columnName: string, color?: string) => void;
@@ -172,10 +178,14 @@ interface AppContextType {
   copyDivisions: (divisionIds: string[]) => void;
   pasteDivisions: (targetPeriodId: string, options?: { inheritTasks?: boolean }) => void;
 
-  // Task Copy/Paste
+  // Task Copy/Paste & Duplicate
   copiedTaskIds: string[];
   copyTasks: (taskIds: string[]) => void;
-  pasteTasks: (targetClusterId: string, options?: { inherit?: boolean }) => void;
+  duplicateTasks: (taskIds: string[], targetClusterId?: string) => Task[];
+  pasteTasks: (targetClusterId: string, options?: { inherit?: boolean; clearClipboard?: boolean }) => Task[];
+  clearCopiedTasks: () => void;
+  toastMessage: string | null;
+  showToast: (msg: string) => void;
 
   // Smart Area
   updateSmartAreaItemPosition: (smartAreaId: string, clusterId: string, x: number, y: number, width?: number, height?: number) => void;
@@ -295,6 +305,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [selectedDivisionIds, setSelectedDivisionIds] = useState<string[]>([]);
   const [copiedDivisionIds, setCopiedDivisionIds] = useState<string[]>([]);
   const [activeChatGroupId, setActiveChatGroupId] = useState<string | null>(null);
+
+  // Global Toast state
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const showToast = (msg: string) => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToastMessage(msg);
+    toastTimeoutRef.current = setTimeout(() => {
+      setToastMessage(null);
+    }, 3200);
+  };
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -426,7 +448,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return;
     }
 
-    // Debounce write to Firestore to optimize quota and avoid rate limits
+    // Debounce write to Firestore to optimize quota and avoid rate limits (1500ms batching)
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
@@ -434,7 +456,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       saveToFirestore(db).catch((err) => {
         console.warn('Không thể đồng bộ lên Firestore:', err);
       });
-    }, 600);
+    }, 1500);
 
     return () => {
       if (saveTimeoutRef.current) {
@@ -803,12 +825,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (!currentUser) throw new Error('Yêu cầu đăng nhập');
     const slug = name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') || 'workspace';
     const inviteCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const timestamp = Date.now();
 
     const newWs: Workspace = {
-      id: `ws-${Date.now()}`,
+      id: `ws-${timestamp}`,
       owner_id: currentUser.id,
       name: name.trim(),
-      slug: `${slug}-${Date.now().toString().slice(-4)}`,
+      slug: `${slug}-${timestamp.toString().slice(-4)}`,
       description: description.trim(),
       icon,
       color,
@@ -819,7 +842,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
 
     const newMember: WorkspaceMember = {
-      id: `wsm-${Date.now()}`,
+      id: `wsm-${timestamp}`,
       workspace_id: newWs.id,
       user_id: currentUser.id,
       role_in_workspace: 'owner',
@@ -827,13 +850,102 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       joined_at: new Date().toISOString(),
     };
 
-    setDb((prev) => ({
-      ...prev,
-      workspaces: [...prev.workspaces, newWs],
-      workspace_members: [...prev.workspace_members, newMember],
-    }));
+    // Auto-create default initial Period for the new workspace
+    const newPeriod: Period = {
+      id: `p-${timestamp}`,
+      workspace_id: newWs.id,
+      name: 'Chu kỳ 1',
+      type: 'month',
+      start_date: new Date().toISOString().split('T')[0],
+      end_date: new Date(timestamp + 30 * 86400000).toISOString().split('T')[0],
+      timezone: 'Asia/Ho_Chi_Minh',
+      color: '#3b82f6',
+      sort_order: 1,
+      is_archived: false,
+      created_by: currentUser.id,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    // Auto-create default Division for the new workspace
+    const newDivision: Division = {
+      id: `div-${timestamp}`,
+      workspace_id: newWs.id,
+      period_id: newPeriod.id,
+      owner_id: currentUser.id,
+      name: 'Chung',
+      description: 'Phân chia mặc định',
+      visibility: 'public',
+      layout_type: 'full',
+      color: '#3B82F6',
+      icon: 'Layers',
+      sort_order: 1,
+      is_default: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    // Auto-create default Clusters for this division
+    const defaultClusters: Cluster[] = [
+      {
+        id: `clu-${timestamp}-1`,
+        division_id: newDivision.id,
+        name: 'Cụm 1',
+        description: 'Chờ xử lý',
+        color: '#6366F1',
+        icon: 'folder',
+        sort_order: 1,
+        is_collapsed: false,
+        created_by: currentUser.id,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      {
+        id: `clu-${timestamp}-2`,
+        division_id: newDivision.id,
+        name: 'Cụm 2',
+        description: 'Đang thực hiện',
+        color: '#3B82F6',
+        icon: 'folder',
+        sort_order: 2,
+        is_collapsed: false,
+        created_by: currentUser.id,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      {
+        id: `clu-${timestamp}-3`,
+        division_id: newDivision.id,
+        name: 'Cụm 3',
+        description: 'Hoàn thành',
+        color: '#10B981',
+        icon: 'folder',
+        sort_order: 3,
+        is_collapsed: false,
+        created_by: currentUser.id,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ];
+
+    setDb((prev) => {
+      const updated: DatabaseState = {
+        ...prev,
+        workspaces: [...prev.workspaces, newWs],
+        workspace_members: [...prev.workspace_members, newMember],
+        periods: [...prev.periods, newPeriod],
+        divisions: [...prev.divisions, newDivision],
+        clusters: [...prev.clusters, ...defaultClusters],
+      };
+      saveDatabase(updated);
+      saveToFirestore(updated).catch(() => {});
+      return updated;
+    });
 
     setActiveWorkspaceId(newWs.id);
+    setActivePeriodId(newPeriod.id);
+    setActiveDivisionId(newDivision.id);
+    setActiveClusterId(null);
     logActivity(newWs.id, 'Tạo Workspace', 'workspace', newWs.id, { name: newWs.name });
     return newWs;
   };
@@ -1032,25 +1144,107 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     data: Omit<Division, 'id' | 'owner_id' | 'created_at' | 'updated_at'>
   ) => {
     if (!currentUser) throw new Error('Yêu cầu đăng nhập');
-    const newDivId = `div-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const timestamp = Date.now();
+    const newDivId = `div-${timestamp}-${Math.random().toString(36).substring(2, 6)}`;
+    
+    // Resolve workspace_id
+    const targetWsId = data.workspace_id || activeWorkspaceId || db.workspaces[0]?.id || 'ws-default';
+    
+    // Resolve period_id for this workspace
+    let targetPeriodId = data.period_id;
+    const wsPeriod = db.periods.find((p) => p.workspace_id === targetWsId && !p.is_archived);
+    let autoPeriodToCreate: Period | null = null;
+
+    if (!targetPeriodId || !db.periods.some((p) => p.id === targetPeriodId && p.workspace_id === targetWsId)) {
+      if (wsPeriod) {
+        targetPeriodId = wsPeriod.id;
+      } else {
+        targetPeriodId = `p-${timestamp}`;
+        autoPeriodToCreate = {
+          id: targetPeriodId,
+          workspace_id: targetWsId,
+          name: 'Chu kỳ 1',
+          type: 'month',
+          start_date: new Date().toISOString().split('T')[0],
+          end_date: new Date(timestamp + 30 * 86400000).toISOString().split('T')[0],
+          timezone: 'Asia/Ho_Chi_Minh',
+          color: '#3b82f6',
+          sort_order: 1,
+          is_archived: false,
+          created_by: currentUser.id,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+      }
+    }
+
     const newDiv: Division = {
       ...data,
       id: newDivId,
+      workspace_id: targetWsId,
+      period_id: targetPeriodId,
       owner_id: currentUser.id,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
 
+    // Auto-create 3 default clusters for this division
+    const defaultClusters: Cluster[] = [
+      {
+        id: `clu-${timestamp}-1`,
+        division_id: newDivId,
+        name: 'Cụm 1',
+        description: 'Chờ xử lý',
+        color: '#6366F1',
+        icon: 'folder',
+        sort_order: 1,
+        is_collapsed: false,
+        created_by: currentUser.id,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      {
+        id: `clu-${timestamp}-2`,
+        division_id: newDivId,
+        name: 'Cụm 2',
+        description: 'Đang thực hiện',
+        color: '#3B82F6',
+        icon: 'folder',
+        sort_order: 2,
+        is_collapsed: false,
+        created_by: currentUser.id,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      {
+        id: `clu-${timestamp}-3`,
+        division_id: newDivId,
+        name: 'Cụm 3',
+        description: 'Hoàn thành',
+        color: '#10B981',
+        icon: 'folder',
+        sort_order: 3,
+        is_collapsed: false,
+        created_by: currentUser.id,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ];
+
     setDb((prev) => {
-      const updated = {
+      const updated: DatabaseState = {
         ...prev,
+        periods: autoPeriodToCreate ? [...prev.periods, autoPeriodToCreate] : prev.periods,
         divisions: [...prev.divisions, newDiv],
+        clusters: [...prev.clusters, ...defaultClusters],
       };
       saveDatabase(updated);
       saveToFirestore(updated).catch(() => {});
       return updated;
     });
 
+    setActiveWorkspaceId(targetWsId);
+    setActivePeriodId(targetPeriodId);
     setActiveDivisionId(newDiv.id);
     setActiveClusterId(null);
     logActivity(newDiv.workspace_id, 'Tạo Division', 'division', newDiv.id, {
@@ -1176,12 +1370,48 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       cluId = existingClu ? existingClu.id : `clu-default-${divId}`;
     }
 
+    // Auto-resolve and preserve mode_clusters for all relevant Board Modes
+    const initialModeClusters: Record<string, string> = { ...(data.mode_clusters || {}) };
+    const divBoardModes = (db.board_modes || []).filter(
+      (m) => m.division_id === divId || m.is_preset
+    );
+
+    for (const bm of divBoardModes) {
+      if (!initialModeClusters[bm.id]) {
+        const colMatch = (bm.clusters || []).find((c) => c.id === cluId);
+        if (colMatch) {
+          initialModeClusters[bm.id] = colMatch.id;
+        } else {
+          const cluObj = db.clusters.find((c) => c.id === cluId);
+          if (cluObj) {
+            const nameMatch = (bm.clusters || []).find(
+              (c) => c.name.toLowerCase() === cluObj.name.toLowerCase()
+            );
+            if (nameMatch) {
+              initialModeClusters[bm.id] = nameMatch.id;
+            }
+          }
+        }
+      }
+    }
+
+    // Ensure cluster_id points to a valid division cluster if cluId was a mode-specific column
+    let canonicalCluId = cluId;
+    const isCluInDb = db.clusters.some((c) => c.id === cluId && c.division_id === divId);
+    if (!isCluInDb) {
+      const existingDivClu = db.clusters.find((c) => c.division_id === divId);
+      if (existingDivClu) {
+        canonicalCluId = existingDivClu.id;
+      }
+    }
+
     const newTask: Task = {
       ...data,
       workspace_id: wsId,
       period_id: perId,
       division_id: divId,
-      cluster_id: cluId,
+      cluster_id: canonicalCluId,
+      mode_clusters: initialModeClusters,
       id: `tsk-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       created_by: currentUser.id,
       created_at: new Date().toISOString(),
@@ -1189,6 +1419,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
 
     setDb((prev) => {
+      // Check for rapid accidental duplicate task creation (same title, workspace, and cluster created < 3s ago)
+      const existingRecent = prev.tasks.find(
+        (t) =>
+          t.title.trim().toLowerCase() === newTask.title.trim().toLowerCase() &&
+          t.workspace_id === wsId &&
+          t.cluster_id === cluId &&
+          Date.now() - new Date(t.created_at).getTime() < 3000
+      );
+      if (existingRecent) {
+        return prev;
+      }
+
       let newDivisions = prev.divisions;
       if (!newDivisions.some((d) => d.id === divId)) {
         const fallbackDiv: Division = {
@@ -1583,23 +1825,50 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   // Custom Board Modes (Perspectives)
-  const createBoardMode = (name: string, description = '', clusters: BoardModeCluster[] = []) => {
-    if (!activeDivision) {
+  const createBoardMode = (
+    name: string,
+    description = '',
+    clusters: BoardModeCluster[] = [],
+    targetDivisionId?: string
+  ) => {
+    const divId = targetDivisionId || activeDivision?.id;
+    if (!divId) {
       throw new Error('Chưa chọn Division. Bắt buộc phải có Division để tạo chế độ bảng.');
     }
+    const timestamp = Date.now();
+    const finalClusters: BoardModeCluster[] =
+      clusters.length > 0
+        ? clusters.map((c, idx) => ({
+            id: c.id || `c-${timestamp}-${idx + 1}`,
+            name: c.name || `Cột ${idx + 1}`,
+            color: c.color || (idx === 0 ? '#6366F1' : idx === 1 ? '#F59E0B' : idx === 2 ? '#8B5CF6' : '#10B981'),
+            sort_order: c.sort_order ?? idx + 1,
+          }))
+        : [
+            { id: `c-${timestamp}-1`, name: 'Cần làm', color: '#6366F1', sort_order: 1 },
+            { id: `c-${timestamp}-2`, name: 'Đang làm', color: '#F59E0B', sort_order: 2 },
+            { id: `c-${timestamp}-3`, name: 'Kiểm thử', color: '#8B5CF6', sort_order: 3 },
+            { id: `c-${timestamp}-4`, name: 'Hoàn thành', color: '#10B981', sort_order: 4 },
+          ];
+
     const newMode: BoardMode = {
-      id: `bm-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      id: `bm-${timestamp}-${Math.random().toString(36).substring(2, 6)}`,
       name: name.trim(),
       description: description.trim(),
       is_preset: false,
-      division_id: activeDivision.id,
-      clusters: clusters,
+      division_id: divId,
+      clusters: finalClusters,
     };
 
-    setDb((prev) => ({
-      ...prev,
-      board_modes: [...(prev.board_modes || []), newMode],
-    }));
+    setDb((prev) => {
+      const updated = {
+        ...prev,
+        board_modes: [...(prev.board_modes || []), newMode],
+      };
+      saveDatabase(updated);
+      saveToFirestore(updated).catch(() => {});
+      return updated;
+    });
 
     setActiveBoardModeId(newMode.id);
     return newMode;
@@ -1930,56 +2199,220 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     });
   };
 
-  // Task Copy/Paste
+  // Task Copy/Paste & Duplicate
   const copyTasks = (taskIds: string[]) => {
+    if (!taskIds || taskIds.length === 0) return;
     setCopiedTaskIds(taskIds);
+
+    // Also write structured text summary to system clipboard for convenience
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        const matching = db.tasks.filter((t) => taskIds.includes(t.id));
+        if (matching.length > 0) {
+          const text = matching
+            .map((t, idx) => {
+              const checkCount = t.checklists?.length
+                ? ` [${t.checklists.filter((c) => c.completed).length}/${t.checklists.length} việc]`
+                : '';
+              const prio = t.priority ? ` (${t.priority.toUpperCase()})` : '';
+              return `${idx + 1}. ${t.title}${prio}${checkCount}${t.description ? `\n   ${t.description}` : ''}`;
+            })
+            .join('\n\n');
+          navigator.clipboard.writeText(text).catch(() => {});
+        }
+      }
+    } catch {
+      // Ignore clipboard write errors
+    }
   };
 
-  const pasteTasks = (targetClusterId: string, options = { inherit: false }) => {
-    if (copiedTaskIds.length === 0) return;
-    const targetCluster = db.clusters.find((c) => c.id === targetClusterId);
-    if (!targetCluster) return;
-    const targetDiv = db.divisions.find((d) => d.id === targetCluster.division_id);
-    if (!targetDiv) return;
+  const clearCopiedTasks = () => {
+    setCopiedTaskIds([]);
+  };
+
+  const duplicateTasks = (taskIds: string[], targetClusterId?: string): Task[] => {
+    if (!taskIds || taskIds.length === 0) return [];
+    const createdTasks: Task[] = [];
+    let activityWsId = activeWorkspaceId || activeWorkspace?.id;
 
     setDb((prev) => {
-      const existingClusterTasks = prev.tasks.filter((t) => t.cluster_id === targetClusterId);
+      const newTasks: Task[] = [];
+
+      taskIds.forEach((tId) => {
+        const sourceTask = prev.tasks.find((t) => t.id === tId);
+        if (!sourceTask) return;
+
+        const effectiveClusterId = targetClusterId || sourceTask.cluster_id;
+        const targetCluster = prev.clusters.find((c) => c.id === effectiveClusterId);
+        const effectiveDivisionId = targetCluster?.division_id || sourceTask.division_id;
+        const targetDiv = prev.divisions.find((d) => d.id === effectiveDivisionId);
+        const effectiveWorkspaceId = targetDiv?.workspace_id || sourceTask.workspace_id;
+        activityWsId = effectiveWorkspaceId;
+
+        // Position: place right after sourceTask if in same cluster, else at end of cluster
+        let newSortOrder = (sourceTask.sort_order ?? 0) + 1;
+        if (targetClusterId && targetClusterId !== sourceTask.cluster_id) {
+          const destTasks = prev.tasks.filter((t) => t.cluster_id === targetClusterId && !t.is_archived);
+          const maxSort = destTasks.length > 0 ? Math.max(...destTasks.map((t) => t.sort_order ?? 0)) : 0;
+          newSortOrder = maxSort + 1;
+        }
+
+        const newTaskId = `tsk-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+
+        // Deep clone checklists with unique IDs
+        const clonedChecklists: TaskChecklistItem[] = (sourceTask.checklists || []).map((item) => ({
+          id: `chk-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          text: item.text,
+          completed: item.completed,
+        }));
+
+        const baseTitle = sourceTask.title.includes('(Bản sao)')
+          ? sourceTask.title
+          : `${sourceTask.title} (Bản sao)`;
+
+        const clonedTask: Task = {
+          ...sourceTask,
+          id: newTaskId,
+          workspace_id: effectiveWorkspaceId,
+          period_id: targetDiv?.period_id || sourceTask.period_id,
+          division_id: effectiveDivisionId,
+          cluster_id: effectiveClusterId,
+          sort_order: newSortOrder,
+          title: baseTitle,
+          checklists: clonedChecklists,
+          tags: [...(sourceTask.tags || [])],
+          alarm_triggered: false,
+          parent_task_id: undefined,
+          is_inherited: false,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        newTasks.push(clonedTask);
+        createdTasks.push(clonedTask);
+      });
+
+      const updated = {
+        ...prev,
+        tasks: [...prev.tasks, ...newTasks],
+      };
+      saveDatabase(updated);
+      saveToFirestore(updated).catch(() => {});
+      return updated;
+    });
+
+    if (activityWsId) {
+      logActivity(activityWsId, 'Nhân bản Task', 'task', targetClusterId || 'current', {
+        count: createdTasks.length,
+      });
+    }
+
+    return createdTasks;
+  };
+
+  const pasteTasks = (
+    targetClusterId: string,
+    options: { inherit?: boolean; clearClipboard?: boolean } = { inherit: false, clearClipboard: false }
+  ): Task[] => {
+    if (copiedTaskIds.length === 0) return [];
+
+    let targetCluster = db.clusters.find((c) => c.id === targetClusterId);
+    let targetDivisionId = targetCluster?.division_id || activeDivision?.id;
+    let targetWorkspaceId = activeWorkspace?.id || activeWorkspaceId || db.workspaces[0]?.id;
+    let targetPeriodId = activePeriod?.id || activeDivision?.period_id || db.periods[0]?.id;
+
+    if (!targetCluster && activeBoardModeId) {
+      const mode = (db.board_modes || []).find((m) => m.id === activeBoardModeId);
+      const modeCol = mode?.clusters?.find((c) => c.id === targetClusterId);
+      if (modeCol) {
+        targetDivisionId = mode.division_id || activeDivision?.id;
+      }
+    }
+
+    if (!targetDivisionId && activeDivision) {
+      targetDivisionId = activeDivision.id;
+    }
+    const targetDiv = db.divisions.find((d) => d.id === targetDivisionId);
+    if (targetDiv) {
+      targetWorkspaceId = targetDiv.workspace_id;
+      targetPeriodId = targetDiv.period_id;
+    }
+
+    const createdTasks: Task[] = [];
+
+    setDb((prev) => {
+      const existingClusterTasks = prev.tasks.filter((t) => t.cluster_id === targetClusterId && !t.is_archived);
       let maxSort = existingClusterTasks.length > 0 ? Math.max(...existingClusterTasks.map((t) => t.sort_order ?? 0)) : 0;
 
-      const newTasks: Task[] = [];
       copiedTaskIds.forEach((tId) => {
         const sourceTask = prev.tasks.find((t) => t.id === tId);
         if (!sourceTask) return;
 
         maxSort += 1;
         const newTaskId = `tsk-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+
+        const clonedChecklists: TaskChecklistItem[] = (sourceTask.checklists || []).map((item) => ({
+          id: `chk-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          text: item.text,
+          completed: item.completed,
+        }));
+
+        const updatedModeClusters = {
+          ...(sourceTask.mode_clusters || {}),
+        };
+        if (activeBoardModeId) {
+          updatedModeClusters[activeBoardModeId] = targetClusterId;
+        }
+
+        const titleText = options.inherit
+          ? sourceTask.title
+          : (sourceTask.title.includes('(Sao chép)') || sourceTask.title.includes('(Bản sao)')
+              ? sourceTask.title
+              : `${sourceTask.title} (Sao chép)`);
+
         const clonedTask: Task = {
           ...sourceTask,
           id: newTaskId,
-          workspace_id: targetDiv.workspace_id,
-          period_id: targetDiv.period_id,
-          division_id: targetDiv.id,
+          workspace_id: targetWorkspaceId || sourceTask.workspace_id,
+          period_id: targetPeriodId || sourceTask.period_id,
+          division_id: targetDivisionId || sourceTask.division_id,
           cluster_id: targetClusterId,
           sort_order: maxSort,
           parent_task_id: options.inherit ? sourceTask.id : undefined,
           is_inherited: !!options.inherit,
-          title: options.inherit ? sourceTask.title : `${sourceTask.title} (Sao chép)`,
+          title: titleText,
+          checklists: clonedChecklists,
+          tags: [...(sourceTask.tags || [])],
+          alarm_triggered: false,
+          mode_clusters: updatedModeClusters,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
-        newTasks.push(clonedTask);
+
+        createdTasks.push(clonedTask);
       });
 
-      return {
+      const updated = {
         ...prev,
-        tasks: [...prev.tasks, ...newTasks],
+        tasks: [...prev.tasks, ...createdTasks],
       };
+      saveDatabase(updated);
+      saveToFirestore(updated).catch(() => {});
+      return updated;
     });
 
-    logActivity(targetDiv.workspace_id, 'Dán Task', 'task', targetClusterId, {
-      count: copiedTaskIds.length,
-      inherit: options.inherit,
-    });
+    if (options.clearClipboard) {
+      setCopiedTaskIds([]);
+    }
+
+    if (targetWorkspaceId) {
+      logActivity(targetWorkspaceId, 'Dán Task', 'task', targetClusterId, {
+        count: createdTasks.length,
+        inherit: !!options.inherit,
+      });
+    }
+
+    return createdTasks;
   };
 
   // Chat Groups
@@ -2542,8 +2975,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       );
     };
 
-    const timer = setInterval(checkAutoSnapshot, 25000);
-    const initialTimer = setTimeout(checkAutoSnapshot, 3000);
+    // Check auto snapshot every 5 minutes to avoid burning CPU and DB reads
+    const timer = setInterval(checkAutoSnapshot, 300000);
+    const initialTimer = setTimeout(checkAutoSnapshot, 5000);
 
     return () => {
       clearInterval(timer);
@@ -2783,7 +3217,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
         copiedTaskIds,
         copyTasks,
+        duplicateTasks,
         pasteTasks,
+        clearCopiedTasks,
+        toastMessage,
+        showToast,
 
         searchQuery,
         setSearchQuery,

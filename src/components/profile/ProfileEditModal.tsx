@@ -37,6 +37,30 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({ isOpen, onCl
   const [phone, setPhone] = useState(currentUser?.phone || '');
   const [savedSuccess, setSavedSuccess] = useState(false);
 
+  const [mascotVisible, setMascotVisible] = useState(() => {
+    try {
+      const saved = localStorage.getItem('page_mascot_companion_prefs');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return parsed.visible !== false;
+      }
+    } catch {}
+    return true;
+  });
+
+  const handleToggleMascot = (checked: boolean) => {
+    setMascotVisible(checked);
+    try {
+      const saved = localStorage.getItem('page_mascot_companion_prefs');
+      const prefs = saved ? JSON.parse(saved) : {};
+      prefs.visible = checked;
+      localStorage.setItem('page_mascot_companion_prefs', JSON.stringify(prefs));
+    } catch {}
+    window.dispatchEvent(
+      new CustomEvent('toggle_page_mascot_visibility', { detail: { visible: checked } })
+    );
+  };
+
   if (!isOpen || !currentUser) return null;
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -243,6 +267,52 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({ isOpen, onCl
               placeholder="Chia sẻ vai trò, vị trí công tác hoặc chuyên môn của bạn..."
               className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#152037] text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 resize-none"
             />
+          </div>
+
+          {/* Mascot AI Companion Section */}
+          <div className="p-4 rounded-2xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200/80 dark:border-amber-800/40 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">🐾</span>
+                <div>
+                  <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                    Trợ lý Thú cưng Mascot AI
+                  </h4>
+                  <p className="text-[10px] text-slate-500">
+                    Người bạn đồng hành tương tác trên màn hình & ra lệnh bằng giọng nói
+                  </p>
+                </div>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={mascotVisible}
+                  onChange={(e) => handleToggleMascot(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-amber-500"></div>
+              </label>
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-amber-200/50 dark:border-amber-800/30">
+              <span className="text-[11px] text-slate-600 dark:text-slate-400">
+                Tùy chỉnh tính cách (36+ nhân vật), API Key & Giọng đọc:
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  window.dispatchEvent(new CustomEvent('open_mascot_ai_chat'));
+                  setTimeout(() => {
+                    window.dispatchEvent(new CustomEvent('open_mascot_settings'));
+                  }, 60);
+                }}
+                className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-[11px] flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer shrink-0"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Chỉnh Mascot AI</span>
+              </button>
+            </div>
           </div>
 
           {/* Readonly info */}

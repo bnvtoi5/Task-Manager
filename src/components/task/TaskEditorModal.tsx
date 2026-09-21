@@ -18,6 +18,7 @@ import {
 import { Task, TaskPriority, TaskSeverity, TaskStatus, TaskChecklistItem } from '../../types';
 import { useApp } from '../../context/AppContext';
 import { ConfirmModal } from '../common/ConfirmModal';
+import { parseLocalAlarmComponents } from '../mascot/mascotActionExecutor';
 
 interface TaskEditorModalProps {
   isOpen: boolean;
@@ -100,14 +101,13 @@ export const TaskEditorModal: React.FC<TaskEditorModalProps> = ({
     return matched.length > 0 ? matched : db.users.filter((u) => u.is_active);
   }, [activeWorkspace, db.workspace_members, db.users]);
 
-  // Format local ISO for datetime-local input (YYYY-MM-DDTHH:mm)
-  const formatDateTimeLocal = (dateStr?: string | null) => {
-    if (!dateStr) return '';
+  // Format local ISO for datetime-local input (YYYY-MM-DDTHH:mm) without timezone shift
+  const formatDateTimeLocal = (dateStr?: string | null, displayTimeStr?: string | null) => {
+    if (!dateStr && !displayTimeStr) return '';
     try {
-      const d = new Date(dateStr);
-      if (isNaN(d.getTime())) return '';
+      const { year, month, day, hours, minutes } = parseLocalAlarmComponents(displayTimeStr, dateStr);
       const pad = (n: number) => n.toString().padStart(2, '0');
-      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      return `${year}-${pad(month)}-${pad(day)}T${pad(hours)}:${pad(minutes)}`;
     } catch {
       return '';
     }
@@ -128,7 +128,7 @@ export const TaskEditorModal: React.FC<TaskEditorModalProps> = ({
       setDisplayDueText(taskToEdit.display_due_text || '');
       setClusterId(taskToEdit.cluster_id || '');
       setAlarmEnabled(taskToEdit.alarm_enabled || false);
-      setAlarmAt(formatDateTimeLocal(taskToEdit.alarm_at));
+      setAlarmAt(formatDateTimeLocal(taskToEdit.alarm_at, taskToEdit.alarm_time));
       setAlarmRepeat(taskToEdit.alarm_repeat || 'none');
       setIsInherited(taskToEdit.is_inherited || false);
       setChecklists(taskToEdit.checklists || []);
@@ -251,7 +251,17 @@ export const TaskEditorModal: React.FC<TaskEditorModalProps> = ({
     e.preventDefault();
     if (!title.trim()) return;
 
-    const isoAlarm = alarmEnabled && alarmAt ? new Date(alarmAt).toISOString() : null;
+    let isoAlarm: string | null = null;
+    let formattedAlarmTime: string | null = null;
+
+    if (alarmEnabled && alarmAt) {
+      const { year, month, day, hours, minutes } = parseLocalAlarmComponents(null, alarmAt);
+      const localAlarmDate = new Date(year, month - 1, day, hours, minutes, 0, 0);
+      const pad = (n: number) => n.toString().padStart(2, '0');
+      isoAlarm = localAlarmDate.toISOString();
+      formattedAlarmTime = `${pad(hours)}:${pad(minutes)} ngày ${pad(day)}/${pad(month)}/${year}`;
+    }
+
     const chosenClu = clusterId || (divisionClusters.length > 0 ? divisionClusters[0].id : '');
 
     if (taskToEdit) {
@@ -267,6 +277,7 @@ export const TaskEditorModal: React.FC<TaskEditorModalProps> = ({
         display_due_text: displayDueText.trim() || null,
         alarm_enabled: alarmEnabled,
         alarm_at: isoAlarm,
+        alarm_time: formattedAlarmTime,
         alarm_repeat: alarmRepeat,
         alarm_triggered: alarmEnabled ? false : taskToEdit.alarm_triggered,
         is_inherited: isInherited,
@@ -303,6 +314,7 @@ export const TaskEditorModal: React.FC<TaskEditorModalProps> = ({
         display_due_text: displayDueText.trim() || null,
         alarm_enabled: alarmEnabled,
         alarm_at: isoAlarm,
+        alarm_time: formattedAlarmTime,
         alarm_repeat: alarmRepeat,
         alarm_triggered: false,
         checklists,

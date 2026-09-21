@@ -12,12 +12,14 @@ import {
   Clock,
   Send,
   Copy,
+  CopyPlus,
   Link as LinkIcon,
   Repeat,
 } from 'lucide-react';
 import { Task } from '../../types';
 import { useApp } from '../../context/AppContext';
 import { ConfirmModal } from '../common/ConfirmModal';
+import { parseLocalAlarmComponents } from '../mascot/mascotActionExecutor';
 
 interface TaskCardProps {
   task: Task;
@@ -49,6 +51,8 @@ export const TaskCard: React.FC<TaskCardProps> = ({
     highlightedTaskId,
     reorderTaskInCluster,
     copyTasks,
+    duplicateTasks,
+    showToast,
   } = useApp();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
@@ -160,12 +164,27 @@ export const TaskCard: React.FC<TaskCardProps> = ({
   const completedChecklistCount = task.checklists?.filter((c) => c.completed).length || 0;
   const totalChecklists = task.checklists?.length || 0;
 
-  // Format alarm time for display (e.g. "22:53")
-  const displayAlarmTime = task.alarm_time
-    ? task.alarm_time.length > 5
-      ? task.alarm_time.slice(0, 5)
-      : task.alarm_time
-    : null;
+  // Format alarm time for display intelligently (e.g. "08:00" or "08:00 (19/09)") without timezone drift
+  const displayAlarmTime = (() => {
+    if (!task.alarm_enabled) return null;
+    if (!task.alarm_at && !task.alarm_time) return null;
+    try {
+      const { year, month, day, hours, minutes } = parseLocalAlarmComponents(task.alarm_time, task.alarm_at);
+      const hh = String(hours).padStart(2, '0');
+      const mm = String(minutes).padStart(2, '0');
+      const now = new Date();
+      const isToday =
+        now.getFullYear() === year &&
+        now.getMonth() + 1 === month &&
+        now.getDate() === day;
+      if (isToday) return `${hh}:${mm}`;
+      const dStr = String(day).padStart(2, '0');
+      const mStr = String(month).padStart(2, '0');
+      return `${hh}:${mm} (${dStr}/${mStr})`;
+    } catch {
+      return task.alarm_time || null;
+    }
+  })();
 
   const isHighlighted = highlightedTaskId === task.id;
 
@@ -374,12 +393,29 @@ export const TaskCard: React.FC<TaskCardProps> = ({
                     <span>Chỉnh sửa</span>
                   </button>
 
+                  {/* Nhân bản ngay */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsMenuOpen(false);
+                      duplicateTasks([task.id]);
+                      showToast(`Đã nhân bản công việc "${task.title}"`);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition text-left"
+                  >
+                    <CopyPlus className="w-3.5 h-3.5 text-blue-500" />
+                    <span>Nhân bản task</span>
+                  </button>
+
+                  {/* Sao chép vào bộ nhớ đệm để dán */}
                   <button
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       copyTasks([task.id]);
                       setCopyFeedback(true);
+                      showToast(`Đã sao chép "${task.title}". Bạn có thể dán vào bất kỳ cụm nào.`);
                       setTimeout(() => {
                         setCopyFeedback(false);
                         setIsMenuOpen(false);
@@ -388,7 +424,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
                     className="w-full flex items-center gap-2 px-3 py-2 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition text-left"
                   >
                     <Copy className="w-3.5 h-3.5 text-emerald-500" />
-                    <span>{copyFeedback ? 'Đã chép task!' : 'Sao chép Task'}</span>
+                    <span>{copyFeedback ? 'Đã chép task!' : 'Sao chép (Để dán)'}</span>
                   </button>
 
                   <button

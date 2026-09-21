@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   MoreVertical,
   Plus,
+  Mic,
   ChevronDown,
   ChevronUp,
   ChevronRight,
@@ -20,6 +21,7 @@ import { ConfirmModal } from '../common/ConfirmModal';
 interface ClusterColumnProps {
   cluster: Cluster;
   onAddTask: (clusterId: string) => void;
+  onVoiceAddTask?: (clusterId: string) => void;
   onEditTask: (task: Task) => void;
   onDoubleClickTask: (task: Task) => void;
   onMoveSingleTask: (task: Task) => void;
@@ -39,6 +41,7 @@ interface ClusterColumnProps {
 export const ClusterColumn: React.FC<ClusterColumnProps> = ({
   cluster,
   onAddTask,
+  onVoiceAddTask,
   onEditTask,
   onDoubleClickTask,
   onMoveSingleTask,
@@ -66,6 +69,7 @@ export const ClusterColumn: React.FC<ClusterColumnProps> = ({
     moveTaskToEndOfCluster,
     copiedTaskIds,
     pasteTasks,
+    showToast,
     searchQuery,
     filterAssignee,
     filterPriority,
@@ -227,6 +231,34 @@ export const ClusterColumn: React.FC<ClusterColumnProps> = ({
               </button>
             )}
 
+            {/* Quick Paste Button when tasks are in clipboard buffer */}
+            {copiedTaskIds.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  pasteTasks(cluster.id, { inherit: false });
+                  showToast(`Đã dán ${copiedTaskIds.length} công việc vào cụm "${cluster.name}"`);
+                }}
+                className="flex items-center gap-1 px-2 py-1 text-xs font-semibold rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 transition active:scale-95 cursor-pointer shadow-2xs"
+                title={`Dán ${copiedTaskIds.length} task đã chép vào cụm này`}
+              >
+                <ClipboardPaste className="w-3.5 h-3.5 shrink-0" />
+                <span>Dán ({copiedTaskIds.length})</span>
+              </button>
+            )}
+
+            {/* Voice Add Task button */}
+            {onVoiceAddTask && (
+              <button
+                type="button"
+                onClick={() => onVoiceAddTask(cluster.id)}
+                className="p-1 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-200/60 dark:hover:bg-slate-800 rounded-lg transition"
+                title="Nói để thêm task vào cụm này"
+              >
+                <Mic className="w-4 h-4 text-indigo-500" />
+              </button>
+            )}
+
             {/* Add Task button */}
             <button
               type="button"
@@ -250,7 +282,7 @@ export const ClusterColumn: React.FC<ClusterColumnProps> = ({
               {isMenuOpen && (
                 <>
                   <div className="fixed inset-0 z-20" onClick={() => setIsMenuOpen(false)} />
-                  <div className="absolute right-0 top-full mt-1 z-30 w-40 rounded-xl bg-white dark:bg-[#131b2e] border border-slate-200/90 dark:border-slate-800 shadow-xl py-1 text-xs animate-in fade-in zoom-in-95">
+                  <div className="absolute right-0 top-full mt-1 z-30 w-44 rounded-xl bg-white dark:bg-[#131b2e] border border-slate-200/90 dark:border-slate-800 shadow-xl py-1 text-xs animate-in fade-in zoom-in-95">
                     {allowEdit && (
                       <button
                         type="button"
@@ -272,6 +304,7 @@ export const ClusterColumn: React.FC<ClusterColumnProps> = ({
                           onClick={() => {
                             setIsMenuOpen(false);
                             pasteTasks(cluster.id, { inherit: false });
+                            showToast(`Đã dán ${copiedTaskIds.length} công việc vào cụm "${cluster.name}"`);
                           }}
                           className="w-full flex items-center gap-2 px-3 py-2 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 text-left transition"
                         >
@@ -284,6 +317,7 @@ export const ClusterColumn: React.FC<ClusterColumnProps> = ({
                           onClick={() => {
                             setIsMenuOpen(false);
                             pasteTasks(cluster.id, { inherit: true });
+                            showToast(`Đã dán ${copiedTaskIds.length} công việc (kế thừa) vào cụm "${cluster.name}"`);
                           }}
                           className="w-full flex items-center gap-2 px-3 py-2 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-950/30 text-left transition font-medium"
                           title="Task dán sẽ tự động cập nhật nội dung và báo thức khi task gốc thay đổi"
@@ -336,13 +370,25 @@ export const ClusterColumn: React.FC<ClusterColumnProps> = ({
               <div className="col-span-full flex flex-col items-center justify-center h-28 border border-dashed border-slate-300 dark:border-slate-800 rounded-xl p-3 text-center bg-white/30 dark:bg-slate-900/30">
                 <FolderKanban className="w-6 h-6 text-slate-400 mb-1" />
                 <p className="text-xs text-slate-500 dark:text-slate-400">Chưa có công việc nào</p>
-                <button
-                  type="button"
-                  onClick={() => onAddTask(cluster.id)}
-                  className="mt-2 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
-                >
-                  + Thêm công việc
-                </button>
+                <div className="mt-2 flex items-center justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => onAddTask(cluster.id)}
+                    className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+                  >
+                    + Thêm công việc
+                  </button>
+                  {onVoiceAddTask && (
+                    <button
+                      type="button"
+                      onClick={() => onVoiceAddTask(cluster.id)}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+                    >
+                      <Mic className="w-3 h-3" />
+                      <span>Bằng giọng nói</span>
+                    </button>
+                  )}
+                </div>
               </div>
             ) : (
               tasks.map((task) => (

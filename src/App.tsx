@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { CheckCircle2 } from 'lucide-react';
 import { AppProvider, useApp } from './context/AppContext';
 import { AuthPage } from './components/auth/AuthPage';
 import { AdminDashboard } from './components/admin/AdminDashboard';
@@ -17,6 +18,7 @@ import {
   InviteModal,
 } from './components/modals/EntityModals';
 import { MembersModal, ActivityLogsModal } from './components/modals/RoomModals';
+import { PageMascotCompanion } from './components/mascot/PageMascotCompanion';
 import { Period, Division, Cluster } from './types';
 
 const MainAppContent: React.FC = () => {
@@ -31,6 +33,7 @@ const MainAppContent: React.FC = () => {
     activeAlarmTask,
     dismissAlarm,
     snoozeAlarm,
+    toastMessage,
   } = useApp();
 
   // Modals state
@@ -172,6 +175,17 @@ const MainAppContent: React.FC = () => {
 
       {/* Preview File / Media Modal */}
       <FilePreviewModal />
+
+      {/* Interactive Page Mascot Companion */}
+      <PageMascotCompanion />
+
+      {/* Global Toast Notification */}
+      {toastMessage && (
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2.5 rounded-full bg-neutral-900/90 dark:bg-neutral-800/95 text-white shadow-2xl border border-emerald-500/40 backdrop-blur-md text-xs font-medium animate-in fade-in slide-in-from-top-4 duration-200">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
     </div>
   );
 };

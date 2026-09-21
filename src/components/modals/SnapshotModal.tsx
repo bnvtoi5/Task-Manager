@@ -97,8 +97,10 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({ isOpen, onClose })
     if (currentUser.role === 'admin') return true;
     if (!activeWorkspace) return true;
     if (activeWorkspace.owner_id === currentUser.id) return true;
-    return (activeWorkspace.members || []).some((m) => m.user_id === currentUser.id);
-  }, [currentUser, activeWorkspace]);
+    return (db.workspace_members || []).some(
+      (m) => m.workspace_id === activeWorkspace.id && m.user_id === currentUser.id
+    );
+  }, [currentUser, activeWorkspace, db.workspace_members]);
 
   // All restore points
   const allRestorePoints = useMemo(() => {

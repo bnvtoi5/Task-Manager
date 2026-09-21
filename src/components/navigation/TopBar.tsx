@@ -22,6 +22,8 @@ import {
   RotateCcw,
   Palette,
   BookOpen,
+  Sparkles,
+  Bot,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { AppTheme } from '../../types';
@@ -127,7 +129,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           {/* Menu toggle: 3-bar hamburger for both mobile and desktop */}
           <button
             type="button"
-            onClick={() => setIsSidebarOpen((prev) => !prev)}
+            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
             className="p-1.5 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition cursor-pointer"
             title={isSidebarOpen ? 'Thu hẹp thanh danh mục bên trái' : 'Mở rộng thanh danh mục bên trái'}
             aria-label="Thu hẹp hoặc mở rộng danh mục"
@@ -568,6 +570,26 @@ export const TopBar: React.FC<TopBarProps> = ({
                   >
                     <User className="w-4 h-4 text-indigo-500" />
                     <span>Hồ sơ & Đổi Avatar</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsUserDropdownOpen(false);
+                      window.dispatchEvent(new CustomEvent('open_mascot_ai_chat'));
+                      setTimeout(() => {
+                        window.dispatchEvent(new CustomEvent('open_mascot_settings'));
+                      }, 50);
+                    }}
+                    className="w-full flex items-center justify-between px-3.5 py-2 text-slate-700 dark:text-slate-200 hover:bg-amber-50 dark:hover:bg-amber-950/40 text-left font-semibold transition cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-amber-500" />
+                      <span>Cài đặt Mascot AI</span>
+                    </div>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300 font-bold">
+                      36+ nhân vật
+                    </span>
                   </button>
 
                   <button

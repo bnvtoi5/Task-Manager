@@ -19,17 +19,20 @@ import {
   Trash2,
   LayoutGrid,
   CheckCircle2,
+  Mic,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Task, Cluster, TaskPriority, BoardMode } from '../../types';
 import { ClusterColumn } from '../cluster/ClusterColumn';
 import { TaskEditorModal } from '../task/TaskEditorModal';
 import { BulkActionBar } from '../task/BulkActionBar';
+import { FloatingClipboardBar } from '../task/FloatingClipboardBar';
 import { BulkMoveModal } from '../task/ActionModals';
 import { CreateBoardModeModal } from './CreateBoardModeModal';
 import { AddColumnToModeModal } from './AddColumnToModeModal';
 import { EditColumnInModeModal } from './EditColumnInModeModal';
 import { ConfirmModal } from '../common/ConfirmModal';
+import { VoiceTaskCreatorModal } from '../task/VoiceTaskCreatorModal';
 import { getWeekdayClusterId, getPriorityClusterId } from '../../utils/boardModeUtils';
 
 interface WorkspaceViewProps {
@@ -68,6 +71,11 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     moveTaskInMode,
     reorderTaskInMode,
     collapsedClusterIds,
+    copyTasks,
+    duplicateTasks,
+    pasteTasks,
+    copiedTaskIds,
+    showToast,
   } = useApp();
 
   // Modals state
@@ -164,6 +172,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       name: c.name,
       description: '',
       color: c.color || '#6366F1',
+      icon: (c as any).icon || 'folder',
       sort_order: c.sort_order || idx + 1,
       is_collapsed: !!c.is_collapsed || collapsedClusterIds.includes(c.id),
       created_by: currentUser?.id || '',
@@ -246,7 +255,83 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [viewMode, effectiveIndex, activeClusters]);
 
+  // Global Keyboard Shortcuts (Ctrl+C: Copy, Ctrl+V: Paste, Ctrl+D: Duplicate)
+  useEffect(() => {
+    const handleShortcuts = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'TEXTAREA' ||
+        target?.tagName === 'SELECT' ||
+        target?.isContentEditable
+      ) {
+        return;
+      }
+
+      // Ctrl+C or Cmd+C: Copy selected tasks
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+        if (selectedTaskIds.length > 0) {
+          e.preventDefault();
+          copyTasks(selectedTaskIds);
+          showToast(`Đã sao chép ${selectedTaskIds.length} công việc vào bộ nhớ tạm (Ctrl+C)`);
+        }
+      }
+
+      // Ctrl+V or Cmd+V: Paste copied tasks
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
+        if (copiedTaskIds.length > 0) {
+          e.preventDefault();
+          const targetClusterId = activeClusterId || activeClusters[0]?.id;
+          if (targetClusterId) {
+            const targetClu = activeClusters.find((c) => c.id === targetClusterId);
+            pasteTasks(targetClusterId, { inherit: false });
+            showToast(
+              `Đã dán ${copiedTaskIds.length} công việc vào cụm "${targetClu?.name || 'mục tiêu'}" (Ctrl+V)`
+            );
+          }
+        }
+      }
+
+      // Ctrl+D or Cmd+D: Duplicate selected tasks
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
+        if (selectedTaskIds.length > 0) {
+          e.preventDefault();
+          duplicateTasks(selectedTaskIds);
+          showToast(`Đã nhân bản ${selectedTaskIds.length} công việc (Ctrl+D)`);
+          clearTaskSelection();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleShortcuts);
+    return () => window.removeEventListener('keydown', handleShortcuts);
+  }, [
+    selectedTaskIds,
+    copiedTaskIds,
+    activeClusterId,
+    activeClusters,
+    copyTasks,
+    pasteTasks,
+    duplicateTasks,
+    clearTaskSelection,
+    showToast,
+  ]);
+
   // Task Handlers
+  const [isVoiceTaskModalOpen, setIsVoiceTaskModalOpen] = useState(false);
+  const [voiceTaskTargetClusterId, setVoiceTaskTargetClusterId] = useState<string | undefined>(undefined);
+
+  const handleOpenVoiceTaskCreator = (clusterId?: string) => {
+    setVoiceTaskTargetClusterId(clusterId);
+    setIsVoiceTaskModalOpen(true);
+  };
+
+  const handleOpenDetailedFromVoice = (prefilled: Partial<Task>) => {
+    setTaskToEdit(prefilled as Task);
+    setTargetClusterIdForNewTask(prefilled.cluster_id);
+    setIsTaskModalOpen(true);
+  };
+
   const handleAddTask = (clusterId: string) => {
     setTaskToEdit(null);
     setTargetClusterIdForNewTask(clusterId);
@@ -617,9 +702,13 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
               <span>/</span>
               <span className="font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-1">
                 {activeDivision.visibility === 'public' ? (
-                  <Globe className="w-3.5 h-3.5 text-emerald-500" title="Công khai" />
+                  <span title="Công khai" className="shrink-0 flex items-center">
+                    <Globe className="w-3.5 h-3.5 text-emerald-500" />
+                  </span>
                 ) : (
-                  <Lock className="w-3.5 h-3.5 text-amber-500" title="Riêng tư" />
+                  <span title="Riêng tư" className="shrink-0 flex items-center">
+                    <Lock className="w-3.5 h-3.5 text-amber-500" />
+                  </span>
                 )}
                 <span className="truncate">{activeDivision.name}</span>
               </span>
@@ -660,8 +749,19 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
               </button>
             </div>
 
-            {/* Action Buttons: Add Cluster (ALWAYS PRESENT) */}
+            {/* Action Buttons: Voice Task & Add Cluster */}
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleOpenVoiceTaskCreator()}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 rounded-xl shadow-xs transition active:scale-95 cursor-pointer"
+                title="Tạo công việc bằng giọng nói (Voice-to-Text)"
+              >
+                <Mic className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                <span className="hidden sm:inline">Nói để tạo việc</span>
+                <span className="sm:hidden">Thoại</span>
+              </button>
+
               <button
                 type="button"
                 onClick={handleOpenAddCluster}
@@ -1017,6 +1117,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                   allowDelete={true}
                   allowEdit={true}
                   onAddTask={handleAddTask}
+                  onVoiceAddTask={handleOpenVoiceTaskCreator}
                   onEditTask={handleEditTask}
                   onDoubleClickTask={handleDoubleClickTask}
                   onMoveSingleTask={handleMoveSingleTask}
@@ -1042,6 +1143,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                 allowDelete={true}
                 allowEdit={true}
                 onAddTask={handleAddTask}
+                onVoiceAddTask={handleOpenVoiceTaskCreator}
                 onEditTask={handleEditTask}
                 onDoubleClickTask={handleDoubleClickTask}
                 onMoveSingleTask={handleMoveSingleTask}
@@ -1059,6 +1161,9 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           onOpenBulkMove={() => setIsBulkMoveOpen(true)}
         />
       )}
+
+      {/* Floating Clipboard Bar for copied tasks */}
+      <FloatingClipboardBar />
 
       {/* Task Creation & Editing Modal */}
       <TaskEditorModal
@@ -1137,6 +1242,14 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           setIsDeleteModeConfirmOpen(false);
           setModeToDelete(null);
         }}
+      />
+
+      {/* Voice Task Creator Modal */}
+      <VoiceTaskCreatorModal
+        isOpen={isVoiceTaskModalOpen}
+        onClose={() => setIsVoiceTaskModalOpen(false)}
+        initialClusterId={voiceTaskTargetClusterId}
+        onOpenDetailedEditor={handleOpenDetailedFromVoice}
       />
     </div>
   );

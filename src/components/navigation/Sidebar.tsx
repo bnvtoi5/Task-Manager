@@ -291,9 +291,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     >
                       <div className="flex items-center gap-2 truncate">
                         {d.visibility === 'public' ? (
-                          <Globe className="w-3 h-3 text-emerald-500 shrink-0" title="Công khai" />
+                          <span title="Công khai" className="shrink-0 flex items-center">
+                            <Globe className="w-3 h-3 text-emerald-500" />
+                          </span>
                         ) : (
-                          <Lock className="w-3 h-3 text-amber-500 shrink-0" title="Riêng tư" />
+                          <span title="Riêng tư" className="shrink-0 flex items-center">
+                            <Lock className="w-3 h-3 text-amber-500" />
+                          </span>
                         )}
                         <span className="truncate">{d.name}</span>
                       </div>

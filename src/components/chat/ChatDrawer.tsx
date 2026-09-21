@@ -91,20 +91,19 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose }) => {
       // Switch to room or ensure task is ready
       if (chatTab === 'direct' && activeDirectUserId) {
         // verify if target user is in same workspace
-        const isInRoom = activeWorkspace?.members?.includes(activeDirectUserId);
+        const isInRoom = db.workspace_members.some(
+          (m) => m.workspace_id === activeWorkspace?.id && m.user_id === activeDirectUserId
+        );
         if (!isInRoom) {
           setChatTab('room');
         }
       }
     }
-  }, [stagedTaskForChat]);
+  }, [stagedTaskForChat, activeWorkspace, activeDirectUserId, chatTab, db.workspace_members]);
 
   // Active workspace members IDs
   const workspaceMemberIds = useMemo(() => {
     if (!activeWorkspace) return [];
-    if (activeWorkspace.members && Array.isArray(activeWorkspace.members)) {
-      return activeWorkspace.members;
-    }
     return db.workspace_members
       .filter((m) => m.workspace_id === activeWorkspace.id)
       .map((m) => m.user_id);
@@ -674,7 +673,7 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose }) => {
                       <div className="flex items-center gap-3 min-w-0 flex-1">
                         <div
                           className="w-9 h-9 rounded-xl flex items-center justify-center text-white font-bold text-xs shrink-0 shadow-xs"
-                          style={{ backgroundColor: g.color || '#6366f1' }}
+                          style={{ backgroundColor: (g as any).color || '#6366f1' }}
                         >
                           <Hash className="w-5 h-5" />
                         </div>
@@ -810,7 +809,7 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose }) => {
 
                   <div
                     className="w-7 h-7 rounded-xl flex items-center justify-center text-white font-bold text-xs shrink-0 shadow-xs"
-                    style={{ backgroundColor: activeChatGroup.color || '#6366f1' }}
+                    style={{ backgroundColor: (activeChatGroup as any).color || '#6366f1' }}
                   >
                     <Hash className="w-4 h-4" />
                   </div>
@@ -969,7 +968,16 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose }) => {
                               <div className="w-full bg-black/10 dark:bg-white/10 h-1.5 rounded-full overflow-hidden mb-1.5">
                                 <div
                                   className="bg-emerald-400 h-full rounded-full transition-all"
-                                  style={{ width: `${taskInMsg.progress}%` }}
+                                  style={{
+                                    width: `${
+                                      (taskInMsg as any).progress ??
+                                      (taskInMsg.status === 'done'
+                                        ? 100
+                                        : taskInMsg.status === 'in_progress'
+                                        ? 50
+                                        : 0)
+                                    }%`,
+                                  }}
                                 />
                               </div>
 
