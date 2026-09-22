@@ -15,10 +15,15 @@ import {
   MicOff,
   Headphones,
   ChevronRight,
+  ChevronDown,
   Reply,
   CornerDownRight,
   Check,
   Sparkles,
+  Settings,
+  Key,
+  Bot,
+  Sliders,
 } from 'lucide-react';
 import {
   MascotChatMessage,
@@ -791,8 +796,13 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
     setMessages((prev) => [...prev, userMsg]);
     setIsLoading(true);
 
-    // Setup abort controller
+    // Setup abort controller with a 25-second safeguard timeout to prevent freezing
     abortControllerRef.current = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    }, 25000);
 
     try {
       const context = buildContextPayload(
@@ -866,17 +876,19 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
       }
     } catch (err: any) {
       if (err?.name !== 'AbortError') {
+        const errMsg = err?.message || 'Không thể kết nối đến máy chủ AI';
         setMessages((prev) => [
           ...prev,
           {
             id: `msg-${Date.now() + 1}`,
             role: 'assistant',
-            content: `Lỗi: ${err.message || 'Không thể xử lý yêu cầu'}. Vui lòng thử lại.`,
+            content: `⚠️ [${activePersona.name}]: ${errMsg}. Bạn có thể bấm nút Cài đặt để kiểm tra API Key hoặc đổi sang Mascot / Nhà cung cấp AI khác nhé!`,
             timestamp: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
           },
         ]);
       }
     } finally {
+      window.clearTimeout(timeoutId);
       setIsLoading(false);
       abortControllerRef.current = null;
     }
@@ -1310,51 +1322,69 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
         </div>
       )}
 
-      {/* TOP HEADER - Strictly minimal: Avatar, Name & Status, Nút Thoại, Nút Đóng */}
-      <div className="shrink-0 w-full p-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50/95 dark:bg-slate-900/95 backdrop-blur-md flex items-center justify-between gap-2 z-20">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="relative shrink-0 flex items-center justify-center">
-            <MascotSpriteAvatar
-              persona={activePersona}
-              size={40}
-              interactive={false}
-            />
-            <span
-              className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white dark:border-slate-900 ${
-                isListening
-                  ? 'bg-rose-500 animate-ping'
-                  : isLoading
-                  ? 'bg-amber-400 animate-spin'
-                  : isSpeaking
-                  ? 'bg-emerald-500 animate-bounce'
-                  : 'bg-emerald-500'
-              }`}
-            />
-          </div>
-
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100 truncate">
-                {activePersona.name}
-              </h3>
-              <span className="text-[10px] text-amber-600 dark:text-amber-400 font-mono">
-                {activePersona.handle}
-              </span>
+      {/* TOP HEADER - Mascot Selector, Cài đặt, Thoại, Đóng */}
+      <div className="shrink-0 w-full p-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50/95 dark:bg-slate-900/95 backdrop-blur-md flex items-center justify-between gap-2 z-20">
+        <div className="flex items-center gap-2 min-w-0">
+          {/* Quick Mascot Persona Switcher Button */}
+          <button
+            type="button"
+            onClick={() => setIsSettingsOpen(true)}
+            className="p-1 rounded-2xl bg-white dark:bg-slate-800 hover:bg-amber-50 dark:hover:bg-amber-950/40 border border-slate-200/80 dark:border-slate-700/80 transition-all flex items-center gap-2 group cursor-pointer shadow-2xs hover:border-amber-300"
+            title="Bấm để đổi nhân vật Mascot hoặc chỉnh API Key"
+          >
+            <div className="relative shrink-0 flex items-center justify-center">
+              <MascotSpriteAvatar persona={activePersona} size={34} interactive={false} />
+              <span
+                className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-slate-900 ${
+                  isListening
+                    ? 'bg-rose-500 animate-ping'
+                    : isLoading
+                    ? 'bg-amber-400 animate-spin'
+                    : isSpeaking
+                    ? 'bg-emerald-500 animate-bounce'
+                    : 'bg-emerald-500'
+                }`}
+              />
             </div>
-            <p className="text-[10px] text-slate-500 truncate">
-              {isListening
-                ? '🎙️ Đang nghe giọng nói...'
-                : isLoading
-                ? '⚡ Đang suy nghĩ...'
-                : isSpeaking
-                ? '🔊 Đang đọc phản hồi...'
-                : 'Trợ lý AI sẵn sàng'}
-            </p>
-          </div>
+            <div className="text-left min-w-0 pr-1">
+              <div className="flex items-center gap-1">
+                <span className="font-bold text-xs text-slate-900 dark:text-slate-100 truncate group-hover:text-amber-600 dark:group-hover:text-amber-400">
+                  {activePersona.name}
+                </span>
+                <ChevronDown className="w-3 h-3 text-slate-400 group-hover:text-amber-500 transition-transform" />
+              </div>
+              <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate flex items-center gap-1">
+                <span className="font-mono text-[9px] uppercase px-1 rounded bg-slate-100 dark:bg-slate-700/80 text-slate-600 dark:text-slate-300">
+                  {settings.provider || 'GEMINI'}
+                </span>
+                <span>•</span>
+                <span>
+                  {isListening
+                    ? '🎙️ Đang nghe...'
+                    : isLoading
+                    ? '⚡ Suy nghĩ...'
+                    : isSpeaking
+                    ? '🔊 Đang đọc...'
+                    : 'Sẵn sàng'}
+                </span>
+              </div>
+            </div>
+          </button>
         </div>
 
-        {/* Header Action buttons: Only Thoại and Đóng */}
-        <div className="flex items-center gap-2 shrink-0">
+        {/* Header Action buttons: Cài đặt, Thoại, Đóng */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* Nút Cài đặt (Settings & API Key) */}
+          <button
+            type="button"
+            onClick={() => setIsSettingsOpen(true)}
+            className="px-2.5 py-1.5 rounded-xl bg-white dark:bg-slate-800 hover:bg-amber-50 dark:hover:bg-amber-950/40 text-slate-700 dark:text-slate-200 font-medium text-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer border border-slate-200/80 dark:border-slate-700/80 hover:border-amber-300 shadow-2xs"
+            title="Cài đặt Mascot, API Key & Đổi nhân vật"
+          >
+            <Settings className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+            <span className="hidden sm:inline">Cài đặt</span>
+          </button>
+
           {/* Nút Thoại (Voice Mode) */}
           <button
             type="button"
@@ -1458,6 +1488,49 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
                     />
                   </div>
                 )}
+
+                {/* Quick Repair & Recovery buttons if API Key or Connection issue is present */}
+                {!isUser &&
+                  (msg.content.includes('API Key') ||
+                    msg.content.includes('Cài đặt') ||
+                    msg.content.includes('gián đoạn') ||
+                    msg.content.includes('401') ||
+                    msg.content.includes('405') ||
+                    msg.content.includes('429') ||
+                    msg.content.includes('hạn mức') ||
+                    msg.content.includes('Lỗi:')) && (
+                    <div className="mt-2.5 pt-2 border-t border-slate-200/60 dark:border-slate-700/60 flex flex-wrap items-center gap-1.5 select-none">
+                      <button
+                        type="button"
+                        onClick={() => setIsSettingsOpen(true)}
+                        className="px-2.5 py-1 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-[11px] flex items-center gap-1 shadow-xs transition active:scale-95 cursor-pointer"
+                      >
+                        <Key className="w-3 h-3" />
+                        <span>⚙️ Cài đặt & Nhập API Key</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const currentIndex = personas.findIndex((p) => p.id === activePersona.id);
+                          const nextPersona = personas[(currentIndex + 1) % personas.length];
+                          if (nextPersona) {
+                            setSelectedPersonaId(nextPersona.id);
+                            const updated = { ...settings, personaId: nextPersona.id };
+                            setSettings(updated);
+                            try {
+                              localStorage.setItem(AI_SETTINGS_STORAGE_KEY, JSON.stringify(updated));
+                              window.dispatchEvent(new CustomEvent('mascot_settings_changed', { detail: updated }));
+                            } catch {}
+                            showToast(`Đã đổi sang: ${nextPersona.name}`);
+                          }
+                        }}
+                        className="px-2.5 py-1 rounded-xl bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-200 font-semibold text-[11px] flex items-center gap-1 transition active:scale-95 cursor-pointer"
+                      >
+                        <Bot className="w-3 h-3" />
+                        <span>🎭 Đổi Mascot</span>
+                      </button>
+                    </div>
+                  )}
 
                 {/* Quick Actions (e.g. from /menu or suggestions) */}
                 {msg.quickActions && msg.quickActions.length > 0 && (

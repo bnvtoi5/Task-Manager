@@ -1,12 +1,34 @@
 import express from 'express';
 import path from 'path';
 import https from 'https';
+import cors from 'cors';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
+
+  // Enable full Cross-Origin Resource Sharing (CORS) with preflight support
+  app.use(
+    cors({
+      origin: true,
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+      allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'x-gemini-api-key',
+        'x-api-key',
+        'x-forwarded-for',
+        'x-title',
+        'anthropic-version',
+        'Accept',
+        'Origin',
+      ],
+    })
+  );
+  app.options('*', cors());
 
   app.use(express.json({ limit: '10mb' }));
 
@@ -26,10 +48,12 @@ async function startServer() {
   }
   const activeSessions = new Map<string, ActiveSessionRecord>();
 
-  // Register session when a user logs in from any device
-  app.post('/api/auth/register-session', (req, res) => {
+  // Register session when a user logs in from any device (Support both POST and GET)
+  app.all('/api/auth/register-session', (req, res) => {
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
     try {
-      const { userId, email, sessionToken, device } = req.body || {};
+      const payload = req.method === 'POST' ? req.body : req.query;
+      const { userId, email, sessionToken, device } = payload || {};
       if (!userId || !sessionToken) {
         return res.status(400).json({ error: 'Missing userId or sessionToken' });
       }
@@ -55,10 +79,11 @@ async function startServer() {
     }
   });
 
-  // Heartbeat check: validates if client session is still the active one
-  app.get('/api/auth/check-session', (req, res) => {
-    const userId = req.query.userId as string;
-    const sessionToken = req.query.sessionToken as string;
+  // Heartbeat check: validates if client session is still the active one (Support both GET and POST)
+  app.all('/api/auth/check-session', (req, res) => {
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    const userId = (req.query.userId || req.body?.userId) as string;
+    const sessionToken = (req.query.sessionToken || req.body?.sessionToken) as string;
 
     if (!userId || !sessionToken) {
       return res.status(400).json({ valid: false, reason: 'missing_params' });
@@ -83,10 +108,12 @@ async function startServer() {
     return res.json({ valid: true });
   });
 
-  // Invalidate session on explicit logout
-  app.post('/api/auth/invalidate-session', (req, res) => {
+  // Invalidate session on explicit logout (Support both POST and GET)
+  app.all('/api/auth/invalidate-session', (req, res) => {
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
     try {
-      const { userId, sessionToken } = req.body || {};
+      const payload = req.method === 'POST' ? req.body : req.query;
+      const { userId, sessionToken } = payload || {};
       if (userId) {
         const current = activeSessions.get(userId);
         if (current && (!sessionToken || current.sessionToken === sessionToken)) {
@@ -178,7 +205,11 @@ async function startServer() {
     };
   };
 
-  // Mascot AI Chat Route
+  // Mascot AI Chat Route (POST and GET fallback)
+  app.get('/api/mascot/chat', (req, res) => {
+    return res.json({ ok: true, status: 'ready', message: 'Mascot Chat API endpoint is active.' });
+  });
+
   app.post('/api/mascot/chat', async (req, res) => {
     try {
       const {
@@ -811,7 +842,11 @@ Nếu người dùng chỉ trò chuyện hỏi han hoặc tìm kiếm tra cứu,
     }
   });
 
-  // Mascot API Connection Test Route
+  // Mascot API Connection Test Route (POST and GET fallback)
+  app.get('/api/mascot/test-connection', (req, res) => {
+    return res.json({ ok: true, status: 'ready', message: 'Mascot Test Connection endpoint is active.' });
+  });
+
   app.post('/api/mascot/test-connection', async (req, res) => {
     const startTime = Date.now();
     try {
@@ -1083,11 +1118,12 @@ Nếu người dùng chỉ trò chuyện hỏi han hoặc tìm kiếm tra cứu,
   // Server In-Memory TTS Cache to save quota and provide 0ms instant audio playback
   const ttsAudioCache = new Map<string, Buffer>();
 
-  // Mascot High-Quality Text-to-Speech (TTS) Route - Supports Vietnamese (vi) and English (en)
-  app.get('/api/mascot/tts', async (req, res) => {
+  // Mascot High-Quality Text-to-Speech (TTS) Route - Supports Vietnamese (vi) and English (en) (All HTTP methods)
+  app.all('/api/mascot/tts', async (req, res) => {
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
     try {
-      const rawText = String(req.query.text || req.query.q || '').trim();
-      const langParam = String(req.query.lang || 'vi').toLowerCase();
+      const rawText = String(req.query.text || req.query.q || req.body?.text || req.body?.q || '').trim();
+      const langParam = String(req.query.lang || req.body?.lang || 'vi').toLowerCase();
       const lang = langParam.startsWith('en') ? 'en' : 'vi';
 
       if (!rawText) {

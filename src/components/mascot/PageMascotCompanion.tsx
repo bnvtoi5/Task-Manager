@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { X, ChevronDown, ChevronUp } from 'lucide-react';
+import { X, ChevronDown, ChevronUp, Settings, Sparkles, RefreshCw, MessageSquare } from 'lucide-react';
 import { Mascot } from 'page-mascot';
 import { MascotAIChatDrawer } from './MascotAIChatDrawer';
 import { getStoredPersonas, MascotPersona } from './mascotPersonas';
 import { DEFAULT_AI_SETTINGS, MascotAISettings } from './mascotAITypes';
 import { getMascotSprite } from './mascotSprites';
 import { MascotSpriteAvatar } from './MascotSpriteAvatar';
+import { MascotSettingsModal } from './MascotSettingsModal';
 
 export function openMascotAIChat() {
   window.dispatchEvent(new CustomEvent('open_mascot_ai_chat'));
@@ -49,6 +50,7 @@ export const PageMascotCompanion: React.FC = () => {
 
   // 4. UI Interaction States
   const [isAIChatOpen, setIsAIChatOpen] = useState(false);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isBubbleVisible, setIsBubbleVisible] = useState(false); // Do not pop up uninvited on page load!
   const [currentTipIndex, setCurrentTipIndex] = useState(0);
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 640);
@@ -259,10 +261,55 @@ export const PageMascotCompanion: React.FC = () => {
                   </button>
                 </div>
 
-                {/* "💬 Bấm để chat ngay" Action in bubble */}
-                <div className="mt-1.5 text-[11px] sm:text-xs font-bold text-emerald-600 dark:text-emerald-400 group-hover:text-emerald-700 dark:group-hover:text-emerald-300 flex items-center gap-1.5 transition">
-                  <span className="text-xs sm:text-sm">💬</span>
-                  <span className="group-hover:underline">Bấm để chat ngay</span>
+                {/* Actions row in bubble */}
+                <div className="mt-2 pt-2 border-t border-slate-100 dark:border-neutral-800 flex items-center justify-between gap-1 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={handleOpenChat}
+                    className="font-bold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 flex items-center gap-1 cursor-pointer transition active:scale-95"
+                  >
+                    <span>💬</span>
+                    <span>Chat AI</span>
+                  </button>
+
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsBubbleVisible(false);
+                        const curIdx = personas.findIndex((p) => p.id === activePersona.id);
+                        const nextP = personas[(curIdx + 1) % personas.length];
+                        if (nextP) {
+                          const updated = { ...aiSettings, personaId: nextP.id };
+                          setAiSettings(updated);
+                          try {
+                            localStorage.setItem('page_mascot_ai_settings_v1', JSON.stringify(updated));
+                            window.dispatchEvent(new CustomEvent('mascot_settings_changed', { detail: updated }));
+                          } catch {}
+                        }
+                      }}
+                      className="p-1 px-1.5 rounded-lg bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 font-medium flex items-center gap-1 cursor-pointer transition active:scale-95"
+                      title="Đổi nhanh sang Mascot khác"
+                    >
+                      <RefreshCw className="w-3 h-3 text-amber-500" />
+                      <span>Đổi</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsBubbleVisible(false);
+                        setIsSettingsModalOpen(true);
+                      }}
+                      className="p-1 px-1.5 rounded-lg bg-neutral-100 dark:bg-neutral-800 hover:bg-amber-100 dark:hover:bg-amber-950/60 text-neutral-700 dark:text-neutral-300 font-medium flex items-center gap-1 cursor-pointer transition active:scale-95"
+                      title="Cài đặt Mascot & Đổi API Key"
+                    >
+                      <Settings className="w-3 h-3 text-amber-600" />
+                      <span>Key/Cài đặt</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Speech Bubble Arrow */}
@@ -308,6 +355,32 @@ export const PageMascotCompanion: React.FC = () => {
         isOpen={isAIChatOpen}
         onClose={() => setIsAIChatOpen(false)}
         mascotSpriteId={activePersona.defaultSpriteId || 'bunny'}
+      />
+
+      {/* 4. Independent Settings Modal if opened directly from companion */}
+      <MascotSettingsModal
+        isOpen={isSettingsModalOpen}
+        onClose={() => setIsSettingsModalOpen(false)}
+        settings={aiSettings}
+        onSaveSettings={(newSettings) => {
+          setAiSettings(newSettings);
+          try {
+            localStorage.setItem('page_mascot_ai_settings_v1', JSON.stringify(newSettings));
+            window.dispatchEvent(new CustomEvent('mascot_settings_changed', { detail: newSettings }));
+          } catch {}
+        }}
+        personas={personas}
+        onUpdatePersonas={(newPersonas) => setPersonas(newPersonas)}
+        selectedPersonaId={aiSettings.personaId || personas[0]?.id || 'assistant-bunny'}
+        onSelectPersona={(id) => {
+          const updated = { ...aiSettings, personaId: id };
+          setAiSettings(updated);
+          try {
+            localStorage.setItem('page_mascot_ai_settings_v1', JSON.stringify(updated));
+            window.dispatchEvent(new CustomEvent('mascot_settings_changed', { detail: updated }));
+          } catch {}
+        }}
+        onShowToast={() => {}}
       />
     </>
   );
