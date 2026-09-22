@@ -1908,7 +1908,307 @@ export function parseLocalIntent(
 }
 
 /**
- * Execute request to backend API
+ * Direct Client-Side AI API Call Engine
+ * Used when running on external machines, static hosting environments, or when server returns HTTP 405
+ */
+export async function callDirectClientAI(params: {
+  message: string;
+  persona: MascotPersona;
+  settings: MascotAISettings;
+  context: MascotContextPayload;
+  chatHistory: MascotChatMessage[];
+  signal?: AbortSignal;
+}): Promise<{
+  reply: string;
+  proposals: ActionProposal[];
+  modelUsed?: string;
+}> {
+  const { message, persona, settings, context, chatHistory, signal } = params;
+  const apiKey = (settings.apiKey || '').trim();
+  const provider = settings.provider || 'gemini';
+
+  let model = settings.model || 'gemini-flash-latest';
+  if (model === 'gemini-2.5-flash' || model === 'gemini-3.0-flash' || model === 'gemini-3.6-flash') {
+    model = 'gemini-flash-latest';
+  } else if (model === 'gemini-2.5-flash-lite') {
+    model = 'gemini-3.1-flash-lite';
+  } else if (model === 'gemini-2.5-pro') {
+    model = 'gemini-3.1-pro-preview';
+  } else if (model === 'custom' && settings.customModelName) {
+    model = settings.customModelName.trim();
+  }
+
+  const systemInstruction = `
+${persona.prompt || 'Bạn là một trợ lý AI thông minh, hỗ trợ quản lý công việc và dự án.'}
+
+=== DỮ LIỆU BỐI CẢNH ỨNG DỤNG HIỆN TẠI ===
+${JSON.stringify(context, null, 2)}
+
+=== QUY TẮC PHẢN HỒI (BẮT BUỘC TRẢ VỀ JSON) ===
+Bạn PHẢI trả về ĐÚNG 1 JSON object có 2 trường:
+{
+  "reply": "Nội dung phản hồi Markdown theo phong cách nhân vật",
+  "proposals": [] // Danh sách tác vụ đề xuất nếu có (create_task, update_task, delete_task, filter_tasks, switch_category, set_alarm, v.v.)
+}
+`;
+
+  if (provider === 'gemini') {
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+    const contents = [
+      ...chatHistory.slice(-6).map((m) => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: m.content }],
+      })),
+      {
+        role: 'user',
+        parts: [{ text: message }],
+      },
+    ];
+
+    const body = {
+      systemInstruction: {
+        parts: [{ text: systemInstruction }],
+      },
+      contents,
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 2048,
+        responseMimeType: 'application/json',
+      },
+    };
+
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    });
+
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson?.error?.message || `Gemini API Error (HTTP ${res.status})`);
+    }
+
+    const data = await res.json();
+    const candidateText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+    try {
+      const parsed = JSON.parse(candidateText);
+      return {
+        reply: parsed.reply || candidateText,
+        proposals: Array.isArray(parsed.proposals) ? parsed.proposals : [],
+        modelUsed: model,
+      };
+    } catch {
+      // Try extracting json block if raw
+      const jsonMatch = candidateText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[0]);
+          return {
+            reply: parsed.reply || candidateText,
+            proposals: Array.isArray(parsed.proposals) ? parsed.proposals : [],
+            modelUsed: model,
+          };
+        } catch {}
+      }
+      return {
+        reply: candidateText || 'Đã xử lý yêu cầu của bạn.',
+        proposals: [],
+        modelUsed: model,
+      };
+    }
+  }
+
+  // OpenAI / DeepSeek / OpenRouter / Custom compatible API
+  const baseUrl = (settings.customBaseUrl || (provider === 'deepseek' ? 'https://api.deepseek.com/v1' : provider === 'openrouter' ? 'https://openrouter.ai/api/v1' : 'https://api.openai.com/v1')).replace(/\/$/, '');
+  const endpoint = `${baseUrl}/chat/completions`;
+
+  const messages = [
+    { role: 'system', content: systemInstruction },
+    ...chatHistory.slice(-6).map((m) => ({
+      role: m.role === 'assistant' ? 'assistant' : 'user',
+      content: m.content,
+    })),
+    { role: 'user', content: message },
+  ];
+
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature: 0.7,
+    }),
+    signal,
+  });
+
+  if (!res.ok) {
+    const errJson = await res.json().catch(() => ({}));
+    throw new Error(errJson?.error?.message || `AI API Error (HTTP ${res.status})`);
+  }
+
+  const data = await res.json();
+  const rawText = data?.choices?.[0]?.message?.content || '';
+
+  try {
+    const parsed = JSON.parse(rawText);
+    return {
+      reply: parsed.reply || rawText,
+      proposals: Array.isArray(parsed.proposals) ? parsed.proposals : [],
+      modelUsed: model,
+    };
+  } catch {
+    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[0]);
+        return {
+          reply: parsed.reply || rawText,
+          proposals: Array.isArray(parsed.proposals) ? parsed.proposals : [],
+          modelUsed: model,
+        };
+      } catch {}
+    }
+    return {
+      reply: rawText || 'Đã xử lý yêu cầu của bạn.',
+      proposals: [],
+      modelUsed: model,
+    };
+  }
+}
+
+/**
+ * Direct Client-Side API Connection Testing
+ */
+export async function testDirectClientAI(params: {
+  provider: string;
+  model?: string;
+  apiKey?: string;
+  customBaseUrl?: string;
+}): Promise<TestConnectionResult> {
+  const { provider, apiKey, customBaseUrl } = params;
+  let model = params.model || 'gemini-3.1-flash-lite';
+  if (model === 'gemini-2.5-flash' || model === 'gemini-3.0-flash' || model === 'gemini-3.6-flash') {
+    model = 'gemini-flash-latest';
+  } else if (model === 'gemini-2.5-flash-lite') {
+    model = 'gemini-3.1-flash-lite';
+  }
+
+  const startTime = Date.now();
+
+  try {
+    if (!apiKey || !apiKey.trim()) {
+      return {
+        ok: false,
+        provider,
+        modelUsed: model,
+        message: 'Vui lòng nhập API Key để kiểm tra kết nối trực tiếp từ trình duyệt.',
+        code: 'API_KEY_EMPTY',
+      };
+    }
+
+    if (provider === 'gemini') {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey.trim()}`;
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: 'Trả lời đúng 1 từ: OK' }] }],
+        }),
+      });
+
+      const latencyMs = Date.now() - startTime;
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        return {
+          ok: false,
+          provider: 'gemini',
+          modelUsed: model,
+          latencyMs,
+          message: err?.error?.message || `Lỗi HTTP ${res.status}`,
+          code: `HTTP_${res.status}`,
+        };
+      }
+
+      const data = await res.json();
+      const sampleReply = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'OK';
+
+      return {
+        ok: true,
+        provider: 'gemini',
+        modelUsed: model,
+        latencyMs,
+        keySource: 'custom',
+        message: 'Kết nối trực tiếp tới Google Gemini thành công (Trực tiếp từ Trình duyệt)!',
+        sampleReply,
+        timestamp: new Date().toISOString(),
+      };
+    }
+
+    // OpenAI / DeepSeek / OpenRouter test
+    const baseUrl = (customBaseUrl || (provider === 'deepseek' ? 'https://api.deepseek.com/v1' : provider === 'openrouter' ? 'https://openrouter.ai/api/v1' : 'https://api.openai.com/v1')).replace(/\/$/, '');
+    const endpoint = `${baseUrl}/chat/completions`;
+
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey.trim()}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: 'Trả lời đúng 1 từ: OK' }],
+        max_tokens: 10,
+      }),
+    });
+
+    const latencyMs = Date.now() - startTime;
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      return {
+        ok: false,
+        provider,
+        modelUsed: model,
+        latencyMs,
+        message: err?.error?.message || `Lỗi HTTP ${res.status}`,
+        code: `HTTP_${res.status}`,
+      };
+    }
+
+    const data = await res.json();
+    const sampleReply = data?.choices?.[0]?.message?.content?.trim() || 'OK';
+
+    return {
+      ok: true,
+      provider,
+      modelUsed: model,
+      latencyMs,
+      keySource: 'custom',
+      message: `Kết nối trực tiếp tới ${provider.toUpperCase()} thành công!`,
+      sampleReply,
+      timestamp: new Date().toISOString(),
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      provider,
+      latencyMs: Date.now() - startTime,
+      message: `Không thể kết nối trực tiếp: ${err?.message || 'Lỗi mạng'}`,
+      errorDetails: err?.message,
+    };
+  }
+}
+
+/**
+ * Execute request to backend API with automatic client-side fallback
  */
 export async function sendMascotChatMessage(params: {
   message: string;
@@ -1927,29 +2227,31 @@ export async function sendMascotChatMessage(params: {
 }> {
   const { message, persona, settings, context, chatHistory, signal } = params;
 
+  // Normalize any legacy or discontinued model names
+  let cleanModel = settings.model || 'gemini-flash-latest';
+  if (cleanModel === 'gemini-2.5-flash' || cleanModel === 'gemini-3.0-flash' || cleanModel === 'gemini-3.6-flash') {
+    cleanModel = 'gemini-flash-latest';
+  } else if (cleanModel === 'gemini-2.5-flash-lite') {
+    cleanModel = 'gemini-3.1-flash-lite';
+  } else if (cleanModel === 'gemini-2.5-pro') {
+    cleanModel = 'gemini-3.1-pro-preview';
+  }
+
+  const effectiveModel =
+    settings.model === 'custom' && settings.customModelName?.trim()
+      ? settings.customModelName.trim()
+      : cleanModel;
+
+  const hasCustomKey = Boolean(settings.apiKey && settings.apiKey.trim());
+
   try {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
 
-    if (settings.apiKey && settings.apiKey.trim()) {
-      headers['x-gemini-api-key'] = settings.apiKey.trim();
+    if (hasCustomKey) {
+      headers['x-gemini-api-key'] = settings.apiKey!.trim();
     }
-
-    // Normalize any legacy or discontinued model names from previous localStorage saves
-    let cleanModel = settings.model || 'gemini-flash-latest';
-    if (cleanModel === 'gemini-2.5-flash' || cleanModel === 'gemini-3.0-flash' || cleanModel === 'gemini-3.6-flash') {
-      cleanModel = 'gemini-flash-latest';
-    } else if (cleanModel === 'gemini-2.5-flash-lite') {
-      cleanModel = 'gemini-3.1-flash-lite';
-    } else if (cleanModel === 'gemini-2.5-pro') {
-      cleanModel = 'gemini-3.1-pro-preview';
-    }
-
-    const effectiveModel =
-      settings.model === 'custom' && settings.customModelName?.trim()
-        ? settings.customModelName.trim()
-        : cleanModel;
 
     const res = await fetch('/api/mascot/chat', {
       method: 'POST',
@@ -1966,6 +2268,18 @@ export async function sendMascotChatMessage(params: {
         customBaseUrl: settings.customBaseUrl?.trim() || undefined,
       }),
     });
+
+    // If server responded with 405 (Method Not Allowed - static server) or 404:
+    if (res.status === 405 || res.status === 404) {
+      if (hasCustomKey) {
+        console.log('Server returned 405/404, falling back to direct client AI call...');
+        const directResult = await callDirectClientAI(params);
+        return {
+          ...directResult,
+          systemFallbackNotice: '⚡ Đã gọi AI trực tiếp từ trình duyệt (Client Direct Mode).',
+        };
+      }
+    }
 
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
@@ -1987,6 +2301,20 @@ export async function sendMascotChatMessage(params: {
         proposals: [],
         aborted: true,
       };
+    }
+
+    // If user has an API Key and server failed for any reason, try client direct call
+    if (hasCustomKey) {
+      try {
+        console.log('Trying direct client-side AI fallback due to error:', error?.message);
+        const directResult = await callDirectClientAI(params);
+        return {
+          ...directResult,
+          systemFallbackNotice: '⚡ Phản hồi trực tiếp từ trình duyệt (Direct Client Mode).',
+        };
+      } catch (directErr: any) {
+        console.warn('Direct client AI call also failed:', directErr);
+      }
     }
 
     console.warn('Backend Mascot AI call failed, falling back to local intent parser:', error);
@@ -2044,12 +2372,11 @@ export async function sendMascotChatMessage(params: {
     if (isApiKeyError) {
       friendlyReply = `[${persona.name}]: Chưa kết nối được API ${providerLabel}. Bạn vui lòng bấm nút **Cài đặt & Nhập API Key** bên dưới để cập nhật key cá nhân nhé!`;
     } else if (isQuotaError) {
-      // Extract retry delay if available
       const retryMatch = cleanErrMsg.match(/retry in\s+([0-9.]+s?)/i) || cleanErrMsg.match(/retryDelay['":\s]+([0-9]+s)/i);
       const retryHint = retryMatch && retryMatch[1] ? ` (vui lòng chờ khoảng ${retryMatch[1]} rồi thử lại)` : '';
       friendlyReply = `[${persona.name}]: API Key của bạn đã đạt giới hạn yêu cầu (Rate limit / Quota 429)${retryHint}. Bạn có thể bấm **Cài đặt** để đổi sang nhà cung cấp hoặc Key khác nhé!`;
     } else if (is405orNetworkError) {
-      friendlyReply = `[${persona.name}]: Kết nối tới máy chủ AI đang được định tuyến lại. Bạn có thể bấm nút **Cài đặt & Nhập API Key** để kiểm tra API Key hoặc chọn một nhân vật Mascot khác để tiếp tục trò chuyện nhé!`;
+      friendlyReply = `[${persona.name}]: Khi mở ứng dụng trên thiết bị khác hoặc trang tĩnh (HTTP 405), bạn chỉ cần bấm nút **Cài đặt & Nhập API Key** (Gemini Key miễn phí) là AI sẽ chạy trực tiếp 100% từ trình duyệt của bạn không qua máy chủ!`;
     } else {
       friendlyReply = `[${persona.name}]: Kết nối AI gặp gián đoạn (${cleanErrMsg}). Bạn có thể bấm nút **Cài đặt** để cấu hình lại API Key hoặc ra lệnh trực tiếp như 'tạo task [tên]', 'đặt báo thức [tên]' nhé!`;
     }
@@ -2077,6 +2404,7 @@ export interface TestConnectionResult {
 
 /**
  * Kiểm tra kết nối API tới AI Provider (Gemini, Claude, OpenAI, DeepSeek, OpenRouter, Custom)
+ * Tự động fallback sang kiểm tra trực tiếp từ trình duyệt nếu máy chủ trả về 405/404
  */
 export async function testMascotAPIConnection(params: {
   provider: string;
@@ -2100,9 +2428,20 @@ export async function testMascotAPIConnection(params: {
       }),
     });
 
+    if (res.status === 405 || res.status === 404) {
+      if (apiKey && apiKey.trim()) {
+        console.log('Server returned 405/404 during test, testing direct client-side...');
+        return await testDirectClientAI(params);
+      }
+    }
+
     const data = await res.json().catch(() => ({}));
 
     if (!res.ok) {
+      if (apiKey && apiKey.trim()) {
+        return await testDirectClientAI(params);
+      }
+
       return {
         ok: false,
         provider,
@@ -2126,6 +2465,10 @@ export async function testMascotAPIConnection(params: {
       timestamp: data.timestamp,
     };
   } catch (err: any) {
+    if (apiKey && apiKey.trim()) {
+      return await testDirectClientAI(params);
+    }
+
     return {
       ok: false,
       provider,
