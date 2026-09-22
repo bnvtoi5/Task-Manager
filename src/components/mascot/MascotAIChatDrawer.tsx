@@ -2005,8 +2005,13 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
         selectedPersonaId={selectedPersonaId}
         onSelectPersona={(id) => {
           setSelectedPersonaId(id);
-          setSettings((s) => ({ ...s, personaId: id }));
-          window.dispatchEvent(new CustomEvent('mascot_settings_changed'));
+          const updated = { ...settings, personaId: id };
+          setSettings(updated);
+          try {
+            localStorage.setItem(AI_SETTINGS_STORAGE_KEY, JSON.stringify(updated));
+            localStorage.setItem('page_mascot_ai_settings_v1', JSON.stringify(updated));
+          } catch {}
+          window.dispatchEvent(new CustomEvent('mascot_settings_changed', { detail: updated }));
         }}
         onShowToast={showToast}
       />

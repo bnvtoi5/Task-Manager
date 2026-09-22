@@ -1990,16 +1990,22 @@ export async function sendMascotChatMessage(params: {
     }
 
     console.warn('Backend Mascot AI call failed, falling back to local intent parser:', error);
-    // Fallback to local rule-based intent parsing
+    // Fallback to local rule-based intent parsing (Always prioritize local actions so user never gets stuck)
     const fallback = parseLocalIntent(message, context, persona);
     if (fallback.proposals.length > 0) {
-      return fallback;
+      return {
+        ...fallback,
+        systemFallbackNotice: '⚡ Đang thực thi theo bộ xử lý tác vụ nội bộ (Local Task Engine).',
+      };
     }
-    if (fallback.reply && !fallback.reply.includes('Tôi là') && !fallback.reply.includes('Khi nào bạn cần ra lệnh')) {
-      return fallback;
+    if (fallback.reply && !fallback.reply.includes('Khi nào bạn cần ra lệnh')) {
+      return {
+        ...fallback,
+        systemFallbackNotice: '⚡ Đã chuyển sang chế độ đối thoại nội bộ (Local Fallback Mode).',
+      };
     }
 
-    const rawErrMsg = error?.message || 'Lỗi mạng';
+    const rawErrMsg = error?.message || 'Lỗi kết nối';
     let cleanErrMsg = rawErrMsg;
     try {
       const jsonMatch = rawErrMsg.match(/\{[\s\S]*"error"[\s\S]*\}/);
@@ -2027,17 +2033,25 @@ export async function sendMascotChatMessage(params: {
       cleanErrMsg.includes('hạn mức') ||
       cleanErrMsg.includes('giới hạn');
 
+    const is405orNetworkError =
+      cleanErrMsg.includes('405') ||
+      cleanErrMsg.includes('Method Not Allowed') ||
+      cleanErrMsg.includes('Failed to fetch') ||
+      cleanErrMsg.includes('NetworkError');
+
     const providerLabel = (settings.provider || 'gemini').toUpperCase();
     let friendlyReply = '';
     if (isApiKeyError) {
-      friendlyReply = `[${persona.name}]: Chưa kết nối được API ${providerLabel}. Bạn vui lòng bấm nút Cài đặt để kiểm tra hoặc nhập lại API Key nhé!`;
+      friendlyReply = `[${persona.name}]: Chưa kết nối được API ${providerLabel}. Bạn vui lòng bấm nút **Cài đặt & Nhập API Key** bên dưới để cập nhật key cá nhân nhé!`;
     } else if (isQuotaError) {
       // Extract retry delay if available
       const retryMatch = cleanErrMsg.match(/retry in\s+([0-9.]+s?)/i) || cleanErrMsg.match(/retryDelay['":\s]+([0-9]+s)/i);
       const retryHint = retryMatch && retryMatch[1] ? ` (vui lòng chờ khoảng ${retryMatch[1]} rồi thử lại)` : '';
-      friendlyReply = `[${persona.name}]: API Key của bạn đã đạt giới hạn yêu cầu (Rate limit / Quota 429)${retryHint}. Bạn vui lòng chờ một chút để hạn mức tự hồi phục hoặc nhập API Key khác trong phần Cài đặt Mascot nhé!`;
+      friendlyReply = `[${persona.name}]: API Key của bạn đã đạt giới hạn yêu cầu (Rate limit / Quota 429)${retryHint}. Bạn có thể bấm **Cài đặt** để đổi sang nhà cung cấp hoặc Key khác nhé!`;
+    } else if (is405orNetworkError) {
+      friendlyReply = `[${persona.name}]: Kết nối tới máy chủ AI đang được định tuyến lại. Bạn có thể bấm nút **Cài đặt & Nhập API Key** để kiểm tra API Key hoặc chọn một nhân vật Mascot khác để tiếp tục trò chuyện nhé!`;
     } else {
-      friendlyReply = `[${persona.name}]: Kết nối AI gặp gián đoạn (${cleanErrMsg}). Bạn có thể thử lại hoặc dùng các lệnh trực tiếp như 'tạo việc [tên]', 'đặt báo thức [tên]', v.v.`;
+      friendlyReply = `[${persona.name}]: Kết nối AI gặp gián đoạn (${cleanErrMsg}). Bạn có thể bấm nút **Cài đặt** để cấu hình lại API Key hoặc ra lệnh trực tiếp như 'tạo task [tên]', 'đặt báo thức [tên]' nhé!`;
     }
 
     return {

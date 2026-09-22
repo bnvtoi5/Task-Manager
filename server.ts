@@ -205,13 +205,15 @@ async function startServer() {
     };
   };
 
-  // Mascot AI Chat Route (POST and GET fallback)
-  app.get('/api/mascot/chat', (req, res) => {
-    return res.json({ ok: true, status: 'ready', message: 'Mascot Chat API endpoint is active.' });
-  });
+  // Mascot AI Chat Route (Support all HTTP methods, trailing slashes and preflight)
+  app.all(['/api/mascot/chat', '/api/mascot/chat/'], async (req, res) => {
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    if (req.method === 'GET' && !req.query.message) {
+      return res.json({ ok: true, status: 'ready', message: 'Mascot Chat API endpoint is active.' });
+    }
 
-  app.post('/api/mascot/chat', async (req, res) => {
     try {
+      const payload = req.method === 'POST' ? req.body : { ...req.query, ...req.body };
       const {
         message,
         personaPrompt,
@@ -221,7 +223,7 @@ async function startServer() {
         provider = 'gemini',
         userApiKey,
         customBaseUrl,
-      } = req.body;
+      } = payload || {};
 
       // Determine API key with automatic fallback to platform system key
       const sanitizeApiKey = (k?: unknown): string => {
@@ -842,20 +844,22 @@ Nếu người dùng chỉ trò chuyện hỏi han hoặc tìm kiếm tra cứu,
     }
   });
 
-  // Mascot API Connection Test Route (POST and GET fallback)
-  app.get('/api/mascot/test-connection', (req, res) => {
-    return res.json({ ok: true, status: 'ready', message: 'Mascot Test Connection endpoint is active.' });
-  });
+  // Mascot API Connection Test Route (Support all HTTP methods, trailing slashes and preflight)
+  app.all(['/api/mascot/test-connection', '/api/mascot/test-connection/'], async (req, res) => {
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    if (req.method === 'GET' && !req.query.model && !req.query.provider) {
+      return res.json({ ok: true, status: 'ready', message: 'Mascot Test Connection endpoint is active.' });
+    }
 
-  app.post('/api/mascot/test-connection', async (req, res) => {
     const startTime = Date.now();
     try {
+      const payload = req.method === 'POST' ? req.body : { ...req.query, ...req.body };
       const {
         provider = 'gemini',
         model = 'gemini-3.1-flash-lite',
         apiKey: rawApiKey,
         customBaseUrl,
-      } = req.body;
+      } = payload || {};
 
       const sanitizeApiKey = (k?: unknown): string => {
         if (!k || typeof k !== 'string') return '';
@@ -1119,7 +1123,7 @@ Nếu người dùng chỉ trò chuyện hỏi han hoặc tìm kiếm tra cứu,
   const ttsAudioCache = new Map<string, Buffer>();
 
   // Mascot High-Quality Text-to-Speech (TTS) Route - Supports Vietnamese (vi) and English (en) (All HTTP methods)
-  app.all('/api/mascot/tts', async (req, res) => {
+  app.all(['/api/mascot/tts', '/api/mascot/tts/'], async (req, res) => {
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     try {
       const rawText = String(req.query.text || req.query.q || req.body?.text || req.body?.q || '').trim();

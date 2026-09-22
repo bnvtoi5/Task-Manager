@@ -1077,6 +1077,12 @@ export const MascotSettingsModal: React.FC<MascotSettingsModalProps> = ({
                           <div
                             onClick={() => {
                               onSelectPersona(p.id);
+                              const updated = { ...localSettings, personaId: p.id };
+                              setLocalSettings(updated);
+                              try {
+                                localStorage.setItem('page_mascot_ai_settings_v1', JSON.stringify(updated));
+                                window.dispatchEvent(new CustomEvent('mascot_settings_changed', { detail: updated }));
+                              } catch {}
                               onShowToast(`Đã đổi sang tính cách "${p.name}"!`);
                             }}
                             className="flex items-start gap-2.5 flex-1 cursor-pointer min-w-0"
