@@ -357,8 +357,11 @@ export function createSpeechRecognizer(
   let recognizer: any = null;
   let isListeningActive = false;
   let isExplicitlyStopped = false;
+  let hasFinishedBySilence = false;
+  let hasSpoken = false;
   let silenceTimer: any = null;
   let accumulatedFinal = '';
+  let latestCombined = '';
 
   const targetLang = options.lang
     ? options.lang
@@ -373,15 +376,20 @@ export function createSpeechRecognizer(
     }
   };
 
-  const resetSilenceTimer = () => {
+  const resetSilenceTimer = (userHasSpoken = false) => {
     clearSilenceTimer();
-    const timeout = options.silenceTimeoutMs !== undefined ? options.silenceTimeoutMs : 3500;
+    // If user has spoken, wait 3.5s of natural silence before sending.
+    // If user hasn't spoken yet, give generous 10s idle window so mic doesn't blink off!
+    const timeout = userHasSpoken
+      ? (options.silenceTimeoutMs !== undefined ? options.silenceTimeoutMs : 3500)
+      : 10000;
+
     if (timeout > 0 && isListeningActive) {
       silenceTimer = setTimeout(() => {
-        // User has been silent for the grace period
         if (isListeningActive && !isExplicitlyStopped) {
-          const finalOutput = accumulatedFinal.trim();
+          const finalOutput = (latestCombined || accumulatedFinal).trim();
           if (finalOutput) {
+            hasFinishedBySilence = true;
             options.onResult(finalOutput, true);
           }
           try {
@@ -395,15 +403,15 @@ export function createSpeechRecognizer(
   const setupRecognizer = () => {
     recognizer = new SpeechRecognitionClass();
     recognizer.lang = targetLang;
-    // Set continuous to true so short pauses (breathing, thinking) do NOT stop recognition prematurely
     recognizer.continuous = options.continuous !== undefined ? options.continuous : true;
     recognizer.interimResults = true;
     recognizer.maxAlternatives = 1;
 
     recognizer.onstart = () => {
       isListeningActive = true;
+      hasFinishedBySilence = false;
       options.onStart?.();
-      resetSilenceTimer();
+      resetSilenceTimer(hasSpoken);
     };
 
     recognizer.onresult = (event: any) => {
@@ -419,19 +427,20 @@ export function createSpeechRecognizer(
         }
       }
 
-      const combined = (accumulatedFinal + currentInterim).trim();
-      if (combined) {
-        options.onResult(combined, false);
+      latestCombined = (accumulatedFinal + currentInterim).trim();
+      if (latestCombined) {
+        hasSpoken = true;
+        options.onResult(latestCombined, false);
       }
 
-      // Reset silence grace timer whenever user speaks
-      resetSilenceTimer();
+      // Reset silence grace timer with speech detected
+      resetSilenceTimer(true);
     };
 
     recognizer.onerror = (event: any) => {
       if (event.error === 'no-speech') {
-        // User didn't speak yet; keep listening if continuous
-        resetSilenceTimer();
+        // User didn't speak yet or paused - do NOT kill recognition!
+        resetSilenceTimer(hasSpoken);
         return;
       }
       if (event.error === 'aborted') {
@@ -446,18 +455,31 @@ export function createSpeechRecognizer(
 
     recognizer.onend = () => {
       clearSilenceTimer();
-      isListeningActive = false;
 
-      // If continuous mode was running and user did not explicitly stop, auto-restart unless errored
-      if (!isExplicitlyStopped && options.autoRestart) {
+      // If user did not click stop and silence timer hasn't finished:
+      // Browser disconnected spontaneously (e.g. Chrome 5s audio chunk or no-speech) -> seamlessly resume!
+      if (!isExplicitlyStopped && !hasFinishedBySilence && isListeningActive) {
         try {
           recognizer.start();
           return;
-        } catch (e) {}
+        } catch (e) {
+          setTimeout(() => {
+            if (!isExplicitlyStopped && !hasFinishedBySilence && isListeningActive) {
+              try {
+                recognizer.start();
+              } catch (err) {
+                isListeningActive = false;
+                options.onEnd?.();
+              }
+            }
+          }, 150);
+          return;
+        }
       }
 
-      const finalOutput = accumulatedFinal.trim();
-      if (finalOutput) {
+      isListeningActive = false;
+      const finalOutput = (latestCombined || accumulatedFinal).trim();
+      if (finalOutput && hasFinishedBySilence) {
         options.onResult(finalOutput, true);
       }
       options.onEnd?.();
@@ -469,11 +491,14 @@ export function createSpeechRecognizer(
   return {
     start: () => {
       isExplicitlyStopped = false;
+      hasFinishedBySilence = false;
+      hasSpoken = false;
+      accumulatedFinal = '';
+      latestCombined = '';
       clearSilenceTimer();
       try {
         recognizer.start();
       } catch (e) {
-        // In case previous instance was in closing state
         try {
           setupRecognizer();
           recognizer.start();
@@ -493,12 +518,15 @@ export function createSpeechRecognizer(
       clearSilenceTimer();
       isListeningActive = false;
       accumulatedFinal = '';
+      latestCombined = '';
       try {
         recognizer.abort();
       } catch (e) {}
     },
     resetTranscript: () => {
       accumulatedFinal = '';
+      latestCombined = '';
+      hasSpoken = false;
       clearSilenceTimer();
     },
   };

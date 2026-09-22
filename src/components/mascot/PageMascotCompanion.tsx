@@ -49,10 +49,18 @@ export const PageMascotCompanion: React.FC = () => {
 
   // 4. UI Interaction States
   const [isAIChatOpen, setIsAIChatOpen] = useState(false);
-  const [isBubbleVisible, setIsBubbleVisible] = useState(true);
+  const [isBubbleVisible, setIsBubbleVisible] = useState(false); // Do not pop up uninvited on page load!
   const [currentTipIndex, setCurrentTipIndex] = useState(0);
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 640);
 
   const bubbleTimeoutRef = useRef<number | null>(null);
+
+  // Responsive mobile detection
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 640);
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   // Sync settings when localStorage or custom events change
   useEffect(() => {
@@ -167,22 +175,31 @@ export const PageMascotCompanion: React.FC = () => {
   const handleMascotClick = () => {
     playCuteSound();
 
-    // Cycle tip and show bubble
+    // Cycle tip and show bubble temporarily
     setCurrentTipIndex((prev) => (prev + 1) % tips.length);
     setIsBubbleVisible(true);
 
     if (bubbleTimeoutRef.current) {
       window.clearTimeout(bubbleTimeoutRef.current);
     }
+    // Auto-hide after 4.5s so it never stays stuck or blocks the screen
     bubbleTimeoutRef.current = window.setTimeout(() => {
       setIsBubbleVisible(false);
-    }, 16000);
+    }, 4500);
   };
 
   const handleOpenChat = (e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+    setIsBubbleVisible(false);
     setIsAIChatOpen(true);
   };
+
+  // Clean up timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (bubbleTimeoutRef.current) window.clearTimeout(bubbleTimeoutRef.current);
+    };
+  }, []);
 
   // If user disabled mascot in preferences
   if (!prefs.visible) {
@@ -199,33 +216,33 @@ export const PageMascotCompanion: React.FC = () => {
     <>
       <div
         id="page-mascot-companion-widget"
-        className="fixed bottom-5 right-5 z-[990] flex flex-col items-end select-none font-sans"
+        className="fixed bottom-3 right-3 sm:bottom-5 sm:right-5 z-[990] flex flex-col items-end select-none font-sans pointer-events-auto"
       >
-        {/* Minimized Floating Pill Button */}
+        {/* Minimized Floating Button (Super compact on mobile to free up space) */}
         {prefs.minimized ? (
           <button
             type="button"
             onClick={() => setPrefs((p) => ({ ...p, minimized: false }))}
-            className="flex items-center gap-2.5 px-3.5 py-2 rounded-2xl bg-white/95 dark:bg-neutral-900/95 backdrop-blur-md hover:bg-neutral-50 dark:hover:bg-neutral-800 border border-neutral-200 dark:border-neutral-800 shadow-xl text-xs font-semibold text-neutral-800 dark:text-neutral-100 transition-all hover:scale-105 cursor-pointer"
+            className="flex items-center gap-1.5 p-1.5 sm:px-3 sm:py-2 rounded-full sm:rounded-2xl bg-white/95 dark:bg-neutral-900/95 backdrop-blur-md hover:bg-neutral-50 dark:hover:bg-neutral-800 border border-neutral-200/80 dark:border-neutral-800 shadow-xl text-xs font-semibold text-neutral-800 dark:text-neutral-100 transition-all hover:scale-105 active:scale-95 cursor-pointer"
             title={`Mở thú cưng ${activePersona.name}`}
           >
-            <MascotSpriteAvatar persona={activePersona} size={28} interactive={false} />
-            <span className="font-bold text-emerald-600 dark:text-emerald-400">
+            <MascotSpriteAvatar persona={activePersona} size={isMobile ? 26 : 28} interactive={false} />
+            <span className="hidden sm:inline font-bold text-emerald-600 dark:text-emerald-400">
               {activePersona.name}
             </span>
-            <ChevronUp className="w-4 h-4 text-neutral-400" />
+            <ChevronUp className="w-3.5 h-3.5 text-neutral-400" />
           </button>
         ) : (
           <div className="flex flex-col items-end relative">
-            {/* 1. Speech Bubble (Click directly in bubble to chat) */}
+            {/* 1. Speech Bubble (Only shown when user taps mascot, auto-hides in 4.5s) */}
             {isBubbleVisible && (
               <div
                 onClick={handleOpenChat}
-                className="mb-2.5 w-[255px] sm:w-[280px] p-3 px-3.5 rounded-2xl bg-white/95 dark:bg-neutral-900/95 backdrop-blur-md border border-amber-300/60 dark:border-neutral-800 shadow-xl shadow-neutral-900/5 dark:shadow-black/30 text-neutral-800 dark:text-neutral-100 animate-in fade-in zoom-in-95 duration-200 relative origin-bottom-right cursor-pointer hover:border-emerald-500/80 transition group"
-                title="Bấm vào bóng bóng để mở chat ngay với Mascot"
+                className="mb-2 w-[210px] sm:w-[260px] p-2.5 sm:p-3 px-3 sm:px-3.5 rounded-2xl bg-white/95 dark:bg-neutral-900/95 backdrop-blur-md border border-amber-300/70 dark:border-neutral-800 shadow-xl shadow-neutral-900/10 dark:shadow-black/40 text-neutral-800 dark:text-neutral-100 animate-in fade-in zoom-in-95 duration-200 relative origin-bottom-right cursor-pointer hover:border-emerald-500/80 transition group"
+                title="Bấm để mở chat ngay với Mascot"
               >
                 <div className="flex items-start justify-between gap-1.5">
-                  <p className="text-xs text-neutral-800 dark:text-neutral-200 font-medium leading-relaxed">
+                  <p className="text-[11px] sm:text-xs text-neutral-800 dark:text-neutral-200 font-medium leading-relaxed">
                     <span className="text-amber-500 font-bold mr-1">✨</span>
                     {tips[currentTipIndex] || tips[0]}
                   </p>
@@ -235,7 +252,7 @@ export const PageMascotCompanion: React.FC = () => {
                       e.stopPropagation();
                       setIsBubbleVisible(false);
                     }}
-                    className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 p-0.5 rounded-md transition"
+                    className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 p-0.5 rounded-md transition cursor-pointer"
                     title="Đóng lời thoại"
                   >
                     <X className="w-3 h-3" />
@@ -243,41 +260,42 @@ export const PageMascotCompanion: React.FC = () => {
                 </div>
 
                 {/* "💬 Bấm để chat ngay" Action in bubble */}
-                <div className="mt-2 text-xs font-bold text-emerald-600 dark:text-emerald-400 group-hover:text-emerald-700 dark:group-hover:text-emerald-300 flex items-center gap-1.5 transition">
-                  <span className="text-sm">💬</span>
+                <div className="mt-1.5 text-[11px] sm:text-xs font-bold text-emerald-600 dark:text-emerald-400 group-hover:text-emerald-700 dark:group-hover:text-emerald-300 flex items-center gap-1.5 transition">
+                  <span className="text-xs sm:text-sm">💬</span>
                   <span className="group-hover:underline">Bấm để chat ngay</span>
                 </div>
 
                 {/* Speech Bubble Arrow */}
-                <div className="absolute -bottom-2 right-14 w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-white dark:border-t-neutral-900 drop-shadow-xs" />
+                <div className="absolute -bottom-2 right-8 sm:right-12 w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-white dark:border-t-neutral-900 drop-shadow-xs" />
               </div>
             )}
 
-            {/* 2. Mascot Floating Transparent Container (NO BOX, 100% TRANSPARENT, NO LABEL TEXT AT BOTTOM) */}
+            {/* 2. Mascot Floating Transparent Container (NO BOX, 100% TRANSPARENT) */}
             <div className="flex flex-col items-center relative group select-none">
-              {/* Top right minimize chevron - subtle button visible on hover */}
+              {/* Minimize button - subtle and accessible on both touch/mobile and desktop hover */}
               <button
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
                   setPrefs((p) => ({ ...p, minimized: true }));
                 }}
-                className="absolute -top-1 -right-1 z-20 opacity-0 group-hover:opacity-100 transition-opacity duration-200 w-5 h-5 rounded-full bg-black/40 hover:bg-black/60 dark:bg-white/30 dark:hover:bg-white/50 text-white flex items-center justify-center backdrop-blur-xs cursor-pointer shadow-xs"
-                title="Thu nhỏ"
+                className="absolute -top-1 -right-1 z-20 opacity-70 hover:opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity duration-200 w-5 h-5 rounded-full bg-black/40 hover:bg-black/60 dark:bg-white/30 dark:hover:bg-white/50 text-white flex items-center justify-center backdrop-blur-xs cursor-pointer shadow-xs"
+                title="Thu nhỏ thú cưng"
               >
                 <ChevronDown className="w-3.5 h-3.5" />
               </button>
 
-              {/* Cursor-Tracking Animated Mascot (100% Transparent Background, No Box, No bottom label text) */}
+              {/* Cursor-Tracking Animated Mascot: 68px on mobile, 96px on desktop */}
               <div
                 onClick={handleMascotClick}
+                onDoubleClick={handleOpenChat}
                 className="cursor-pointer transition-transform duration-200 flex items-center justify-center hover:scale-105 active:scale-95 filter drop-shadow-md"
-                title={`Bấm để tương tác cùng ${activePersona.name}`}
+                title={`Chạm để tương tác / Bấm đúp để chat với ${activePersona.name}`}
               >
                 <Mascot
                   directions={activeSprite.directions}
                   reactions={activeSprite.reactions}
-                  size={120}
+                  size={isMobile ? 68 : 96}
                 />
               </div>
             </div>

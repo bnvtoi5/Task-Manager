@@ -8,6 +8,9 @@ import {
   Volume2,
   MessageSquare,
   Radio,
+  Sliders,
+  AlertCircle,
+  Key,
   Check,
 } from 'lucide-react';
 import { MascotPersona } from './mascotPersonas';
@@ -24,12 +27,16 @@ interface MascotVoiceModeOverlayProps {
   isListening: boolean;
   currentTranscript: string;
   lastAiResponse?: string;
+  pendingProposalQuestion?: string | null;
+  onApprovePendingProposals?: () => void;
+  onRejectPendingProposals?: () => void;
   onStartListening: () => void;
   onStopListening: () => void;
   onStopAll: () => void;
   onSelectLanguage?: (lang: 'vi' | 'en') => void;
   onConfirmVoiceSend?: (text: string) => void;
   onCancelVoice?: () => void;
+  onOpenSettings?: () => void;
 }
 
 export const MascotVoiceModeOverlay: React.FC<MascotVoiceModeOverlayProps> = ({
@@ -42,13 +49,28 @@ export const MascotVoiceModeOverlay: React.FC<MascotVoiceModeOverlayProps> = ({
   isListening,
   currentTranscript,
   lastAiResponse,
+  pendingProposalQuestion,
+  onApprovePendingProposals,
+  onRejectPendingProposals,
   onStartListening,
   onStopListening,
   onStopAll,
   onSelectLanguage,
-  onConfirmVoiceSend,
-  onCancelVoice,
+  onConfirmVoiceSend: _onConfirmVoiceSend,
+  onCancelVoice: _onCancelVoice,
+  onOpenSettings,
 }) => {
+  // Auto-start listening on mount when entering Voice Mode
+  useEffect(() => {
+    if (!isOpen) return;
+    const timer = setTimeout(() => {
+      if (!isListening && !isSpeaking && !isLoading) {
+        onStartListening();
+      }
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   // Determine current active status
@@ -57,7 +79,12 @@ export const MascotVoiceModeOverlay: React.FC<MascotVoiceModeOverlayProps> = ({
   let glowColor = 'rgba(245, 158, 11, 0.4)';
   let isPulsing = false;
 
-  if (isListening) {
+  if (pendingProposalQuestion) {
+    statusText = isListening ? 'Đang nghe... Hãy nói "OK" hoặc "Không"' : '❓ Xin hãy xác nhận: OK hoặc Không?';
+    orbColor = 'from-amber-400 via-rose-500 to-amber-600';
+    glowColor = 'rgba(245, 158, 11, 0.6)';
+    isPulsing = true;
+  } else if (isListening) {
     statusText = 'Đang lắng nghe bạn nói...';
     orbColor = 'from-rose-500 via-amber-500 to-orange-500';
     glowColor = 'rgba(239, 68, 68, 0.5)';
@@ -70,9 +97,18 @@ export const MascotVoiceModeOverlay: React.FC<MascotVoiceModeOverlayProps> = ({
   } else if (isSpeaking) {
     statusText = `${activePersona.name} đang trả lời...`;
     orbColor = 'from-emerald-400 via-teal-500 to-cyan-500';
-    glowColor = 'rgba(16, 185, 129, 0.5)';
+    glowColor = 'rgba(168, 85, 247, 0.5)';
     isPulsing = true;
   }
+
+  const hasApiKey = Boolean(settings.apiKey && settings.apiKey.trim());
+  const displayModel =
+    settings.model === 'custom'
+      ? settings.customModelName || 'Custom'
+      : settings.model;
+  const isApiKeyIssue =
+    lastAiResponse?.includes('API Key') ||
+    lastAiResponse?.includes('Chưa kết nối được API');
 
   return (
     <div className="absolute inset-0 z-40 bg-slate-950/95 backdrop-blur-xl text-white flex flex-col items-center justify-between p-6 animate-in fade-in zoom-in-95 duration-200 select-none">
@@ -83,10 +119,23 @@ export const MascotVoiceModeOverlay: React.FC<MascotVoiceModeOverlayProps> = ({
             {activePersona.emoji}
           </div>
           <div>
-            <h4 className="font-bold text-sm tracking-wide flex items-center gap-1.5">
+            <h4 className="font-bold text-sm tracking-wide flex items-center gap-1.5 flex-wrap">
               <span>{activePersona.name}</span>
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-mono">
                 Voice Mode
+              </span>
+              <span
+                className={`text-[9px] px-2 py-0.5 rounded-full border flex items-center gap-1 font-mono ${
+                  hasApiKey
+                    ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
+                    : 'bg-amber-500/15 border-amber-500/30 text-amber-300'
+                }`}
+                title={hasApiKey ? 'Đã kết nối API Key' : 'Chưa nhập API Key cá nhân'}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${hasApiKey ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+                <span>{(settings.provider || 'gemini').toUpperCase()}</span>
+                <span>•</span>
+                <span className="truncate max-w-[110px]">{displayModel}</span>
               </span>
             </h4>
             <p className="text-[11px] text-slate-400">{activePersona.tagline}</p>
@@ -99,7 +148,7 @@ export const MascotVoiceModeOverlay: React.FC<MascotVoiceModeOverlayProps> = ({
               <button
                 type="button"
                 onClick={() => onSelectLanguage('vi')}
-                className={`px-2 py-1 rounded-lg font-bold transition text-[11px] flex items-center gap-1 ${
+                className={`px-2 py-1 rounded-lg font-bold transition text-[11px] flex items-center gap-1 cursor-pointer ${
                   settings.voiceLanguage !== 'en'
                     ? 'bg-amber-500 text-white shadow-xs'
                     : 'text-slate-300 hover:text-white'
@@ -112,7 +161,7 @@ export const MascotVoiceModeOverlay: React.FC<MascotVoiceModeOverlayProps> = ({
               <button
                 type="button"
                 onClick={() => onSelectLanguage('en')}
-                className={`px-2 py-1 rounded-lg font-bold transition text-[11px] flex items-center gap-1 ${
+                className={`px-2 py-1 rounded-lg font-bold transition text-[11px] flex items-center gap-1 cursor-pointer ${
                   settings.voiceLanguage === 'en'
                     ? 'bg-indigo-600 text-white shadow-xs'
                     : 'text-slate-300 hover:text-white'
@@ -125,10 +174,21 @@ export const MascotVoiceModeOverlay: React.FC<MascotVoiceModeOverlayProps> = ({
             </div>
           )}
 
+          {onOpenSettings && (
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-slate-300 hover:text-amber-300 transition active:scale-95 cursor-pointer"
+              title="Cài đặt API Key & Nhà cung cấp AI"
+            >
+              <Sliders className="w-4 h-4" />
+            </button>
+          )}
+
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-slate-300 transition active:scale-95"
+            className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-slate-300 transition active:scale-95 cursor-pointer"
             title="Quay lại giao diện chat chữ"
           >
             <X className="w-5 h-5" />
@@ -200,58 +260,84 @@ export const MascotVoiceModeOverlay: React.FC<MascotVoiceModeOverlayProps> = ({
 
           {/* Live Transcript or AI Text */}
           <div className="min-h-[56px] flex flex-col items-center justify-center px-4 w-full">
-            {isListening ? (
-              <p className="text-sm font-medium text-slate-200 italic animate-pulse">
-                &ldquo;{currentTranscript || 'Đang nghe bạn...'}&rdquo;
-              </p>
-            ) : !isListening && currentTranscript ? (
-              /* VOICE APPROVAL CARD IN OVERLAY */
-              <div className="w-full max-w-xs p-3 rounded-2xl bg-white/10 border border-amber-400/40 backdrop-blur-md shadow-xl text-center space-y-2.5 animate-in fade-in zoom-in-95">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-300 block">
-                  Duyệt câu nói của bạn
+            {pendingProposalQuestion ? (
+              <div className="w-full max-w-sm p-4 rounded-2xl bg-amber-500/15 border border-amber-400/50 backdrop-blur-md shadow-2xl text-center space-y-2.5 animate-in fade-in zoom-in-95">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-400/20 text-amber-300 text-[11px] font-bold uppercase tracking-wider">
+                  <Sparkles className="w-3 h-3" />
+                  <span>Xác nhận hành động</span>
                 </span>
-                <p className="text-xs font-semibold text-white">
-                  &ldquo;{currentTranscript}&rdquo;
+                <p className="text-xs font-semibold text-white leading-relaxed">
+                  {pendingProposalQuestion}
                 </p>
-                <div className="flex items-center justify-center gap-2 pt-1">
+                {isListening && (
+                  <p className="text-[11px] text-amber-300/90 italic animate-pulse">
+                    🎙️ Đang nghe... Hãy nói &ldquo;OK&rdquo; hoặc &ldquo;Không&rdquo;
+                  </p>
+                )}
+                <div className="flex items-center justify-center gap-2.5 pt-1">
                   <button
                     type="button"
-                    onClick={onStartListening}
-                    className="px-2.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-[11px] font-semibold text-slate-200 flex items-center gap-1 transition cursor-pointer"
-                  >
-                    <Mic className="w-3.5 h-3.5" />
-                    <span>Nói tiếp</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (onConfirmVoiceSend) onConfirmVoiceSend(currentTranscript);
-                    }}
-                    className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white font-bold text-[11px] flex items-center gap-1 shadow-md transition active:scale-95 cursor-pointer"
+                    onClick={onApprovePendingProposals}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white font-bold text-xs flex items-center gap-1.5 shadow-md transition active:scale-95 cursor-pointer"
                   >
                     <Check className="w-3.5 h-3.5" />
-                    <span>Duyệt & Gửi</span>
+                    <span>OK</span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      if (onCancelVoice) onCancelVoice();
-                    }}
-                    className="p-1.5 rounded-xl bg-white/10 hover:bg-rose-500/30 text-slate-400 hover:text-white transition cursor-pointer"
-                    title="Xóa câu nói"
+                    onClick={onRejectPendingProposals}
+                    className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-rose-500/20 hover:text-rose-200 text-slate-300 font-semibold text-xs transition active:scale-95 cursor-pointer"
                   >
-                    <X className="w-3.5 h-3.5" />
+                    Không
                   </button>
                 </div>
               </div>
-            ) : isSpeaking && lastAiResponse ? (
-              <p className="text-xs text-slate-300 line-clamp-3 leading-relaxed">
-                {lastAiResponse}
+            ) : isListening ? (
+              <p className="text-sm font-medium text-slate-200 italic animate-pulse">
+                &ldquo;{currentTranscript || 'Đang nghe bạn...'}&rdquo;
               </p>
+            ) : isLoading ? (
+              <p className="text-sm font-medium text-amber-300 animate-pulse flex items-center justify-center gap-2">
+                <Sparkles className="w-4 h-4 text-amber-400 animate-spin" />
+                <span>{activePersona.name} đang xử lý yêu cầu...</span>
+              </p>
+            ) : isSpeaking && lastAiResponse ? (
+              <div className="space-y-1.5">
+                <p className="text-xs text-slate-300 line-clamp-3 leading-relaxed">
+                  {lastAiResponse}
+                </p>
+                {isApiKeyIssue && onOpenSettings && (
+                  <button
+                    type="button"
+                    onClick={onOpenSettings}
+                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[11px] font-semibold transition active:scale-95 cursor-pointer"
+                  >
+                    <Key className="w-3 h-3" />
+                    <span>Mở Cài đặt API Key</span>
+                  </button>
+                )}
+              </div>
+            ) : isApiKeyIssue && onOpenSettings ? (
+              <div className="p-3 rounded-2xl bg-amber-500/15 border border-amber-400/40 max-w-xs space-y-2 text-center">
+                <div className="flex items-center justify-center gap-1.5 text-xs font-bold text-amber-300">
+                  <AlertCircle className="w-4 h-4 text-amber-400" />
+                  <span>Cần cấu hình API Key</span>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-tight">
+                  Nhà cung cấp {settings.provider.toUpperCase()} chưa có khóa API hợp lệ.
+                </p>
+                <button
+                  type="button"
+                  onClick={onOpenSettings}
+                  className="px-3 py-1 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold transition active:scale-95 cursor-pointer"
+                >
+                  Cài đặt ngay
+                </button>
+              </div>
             ) : (
               <p className="text-xs text-slate-400">
                 {settings.continuousVoiceMode
-                  ? 'Chế độ trò chuyện liên tục (ChatGPT Voice): Nghe xong sẽ tự bật lại micro.'
+                  ? 'Chế độ trò chuyện liên tục: Bấm vào quả cầu hoặc micro để nói bất cứ lúc nào.'
                   : 'Bấm micro hoặc biểu tượng giữa màn hình để bắt đầu nói.'}
               </p>
             )}
@@ -268,7 +354,7 @@ export const MascotVoiceModeOverlay: React.FC<MascotVoiceModeOverlayProps> = ({
             if (isListening) onStopListening();
             else onStartListening();
           }}
-          className={`p-3.5 rounded-2xl transition active:scale-95 flex items-center justify-center ${
+          className={`p-3.5 rounded-2xl transition active:scale-95 flex items-center justify-center cursor-pointer ${
             isListening
               ? 'bg-rose-600 text-white animate-pulse shadow-lg shadow-rose-600/50'
               : 'bg-white/10 hover:bg-white/20 text-white'
@@ -291,11 +377,23 @@ export const MascotVoiceModeOverlay: React.FC<MascotVoiceModeOverlayProps> = ({
           </button>
         )}
 
+        {/* Settings button in voice mode */}
+        {onOpenSettings && (
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="p-3.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white transition active:scale-95 flex items-center justify-center cursor-pointer"
+            title="Mở Cài đặt API & Mascot"
+          >
+            <Sliders className="w-5 h-5" />
+          </button>
+        )}
+
         {/* Switch back to text chat */}
         <button
           type="button"
           onClick={onClose}
-          className="p-3.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white transition active:scale-95 flex items-center justify-center"
+          className="p-3.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white transition active:scale-95 flex items-center justify-center cursor-pointer"
           title="Chuyển sang gõ văn bản"
         >
           <MessageSquare className="w-5 h-5" />

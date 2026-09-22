@@ -259,9 +259,13 @@ export function parseLocalIntent(
   persona: MascotPersona
 ): { reply: string; proposals: ActionProposal[] } {
   const effectiveText = text
-    .replace(/^(?:kêu\s+(?:nó|em|bạn)|bảo\s+(?:nó|em|bạn)|nhờ\s+(?:mascot|ai|em|bạn)|hãy|làm\s+ơn|yêu\s+cầu|giúp\s+(?:mình|tôi))\s+/i, '')
+    .replace(/^(?:kêu\s+(?:nó|em|bạn|ai|mascot)|bảo\s+(?:nó|em|bạn|ai|mascot)|nhờ\s+(?:mascot|ai|em|bạn)|hãy|làm\s+ơn|yêu\s+cầu|giúp\s+(?:mình|tôi|tui)|cho\s+(?:mình|tôi|tui)|(?:tôi|tui|mình|em|anh|chị)\s+(?:cần|muốn|đang\s*cần|đang\s*muốn|hãy|hãy\s*giúp))\s+/i, '')
     .trim();
-  const lower = effectiveText.toLowerCase().trim();
+  const cleanedText = effectiveText
+    .replace(/[\.!\?]+$/g, '')
+    .replace(/\s+(?:đi|nha|nhé|ạ|luôn|nhá|với|hộ|giúp\s+(?:mình|tôi|tui)|cho\s+(?:mình|tôi|tui))$/i, '')
+    .trim();
+  const lower = cleanedText.toLowerCase().trim();
   const proposals: ActionProposal[] = [];
 
   const hasActionKeyword =
@@ -1628,14 +1632,23 @@ export function parseLocalIntent(
     }
   }
 
-  // Match division deletion: e.g. "xóa division Marketing", "xóa phân chia 1"
-  const deleteDivisionMatch = text.match(
-    /(?:xóa|hủy|bỏ|delete|remove)\s*(?:hẳn|vĩnh\s*viễn)?\s*(?:phân\s*chia|division|nhóm\s*việc)\s*[:\-\s]*["'“]?([^"'\n]+?)["'”]?$/i
-  );
+  // Match division deletion: e.g. "xóa division Marketing", "xóa phân chia 1", "xóa division", "xóa division hiện tại"
+  const deleteDivisionMatch =
+    cleanedText.match(
+      /(?:xóa|hủy|bỏ|delete|remove)\s*(?:hẳn|vĩnh\s*viễn)?\s*(?:phân\s*chia|division|nhóm\s*việc)(?:\s+[:\-\s]*["'“]?([^"'\n]+?)["'”]?)?$/i
+    ) ||
+    text.match(
+      /(?:xóa|hủy|bỏ|delete|remove)\s*(?:hẳn|vĩnh\s*viễn)?\s*(?:phân\s*chia|division|nhóm\s*việc)(?:\s+[:\-\s]*["'“]?([^"'\n]+?)["'”]?)?$/i
+    );
 
   if (deleteDivisionMatch) {
-    const rawTarget = deleteDivisionMatch[1].trim();
-    const matchedDiv = findMatchingDivision(rawTarget);
+    const rawTarget = (deleteDivisionMatch[1] || '').trim();
+    let matchedDiv = null;
+    if (!rawTarget || /^(này|hiện\s*tại|ở\s*đây)$/i.test(rawTarget)) {
+      matchedDiv = context.active_division || context.divisions[0];
+    } else {
+      matchedDiv = findMatchingDivision(rawTarget);
+    }
 
     if (matchedDiv) {
       proposals.push({
@@ -1651,7 +1664,7 @@ export function parseLocalIntent(
       });
 
       return {
-        reply: `⚠️ **Cảnh báo xóa Phân chia:** Thao tác xóa phân chia (Division) **"${matchedDiv.name}"** sẽ xóa các cụm và công việc trong phân chia này. Vui lòng bấm duyệt bên dưới.`,
+        reply: `⚠️ **Cảnh báo xóa Phân chia:** Tôi đã chuẩn bị đề xuất xóa phân chia **"${matchedDiv.name}"** cùng toàn bộ công việc trực thuộc. Bạn có đồng ý duyệt không? Bạn có thể nói "Duyệt" hoặc "Hủy".`,
         proposals,
       };
     } else {
@@ -1662,13 +1675,17 @@ export function parseLocalIntent(
     }
   }
 
-  // Match division creation: e.g. "tạo division mới Kế toán", "thêm phân chia Design"
-  const createDivisionMatch = text.match(
-    /(?:tạo|thêm|add|lập)\s*(?:mới\s+)?(?:phân\s*chia|division|nhóm\s*việc)\s*[:\-\s]*["'“]?([^"'\n]+?)["'”]?$/i
-  );
+  // Match division creation: e.g. "tạo division mới Kế toán", "thêm phân chia Design", "tạo division", "tạo phân chia"
+  const createDivisionMatch =
+    cleanedText.match(
+      /(?:tạo|thêm|add|lập)\s*(?:mới\s+)?(?:phân\s*chia|division|nhóm\s*việc)(?:\s+mới)?(?:\s*[:\-\s]*["'“]?([^"'\n]+?)["'”]?)?$/i
+    ) ||
+    text.match(
+      /(?:tạo|thêm|add|lập)\s*(?:mới\s+)?(?:phân\s*chia|division|nhóm\s*việc)(?:\s+mới)?(?:\s*[:\-\s]*["'“]?([^"'\n]+?)["'”]?)?$/i
+    );
 
   if (createDivisionMatch) {
-    let divName = createDivisionMatch[1].trim().replace(/^mới\s+/i, '');
+    let divName = (createDivisionMatch[1] || '').trim().replace(/^mới\s+/i, '');
     if (!divName) divName = `Phân chia ${context.divisions.length + 1}`;
     const targetWsId = context.active_workspace?.id || context.workspaces[0]?.id;
     const targetPeriodId = context.active_period?.id || context.periods[0]?.id;
@@ -1687,15 +1704,19 @@ export function parseLocalIntent(
     });
 
     return {
-      reply: `Đã lập đề xuất tạo phân chia (Division) mới **"${divName}"**. Bạn vui lòng duyệt bên dưới!`,
+      reply: `Tôi đã lập đề xuất tạo phân chia (Division) mới **"${divName}"**. Bạn có đồng ý duyệt không? Bạn có thể nói "Duyệt" hoặc "Hủy".`,
       proposals,
     };
   }
 
   // Match division update: e.g. "sửa division Marketing thành Tiếp thị"
-  const updateDivisionMatch = text.match(
-    /(?:sửa|đổi\s*tên|cập\s*nhật|đổi)\s*(?:phân\s*chia|division|nhóm\s*việc)\s*["'“]?([^"'\n]+?)["'”]?\s+(?:thành|sang|thành\s*tên)\s*["'“]?([^"'\n]+?)["'”]?$/i
-  );
+  const updateDivisionMatch =
+    cleanedText.match(
+      /(?:sửa|đổi\s*tên|cập\s*nhật|đổi)\s*(?:phân\s*chia|division|nhóm\s*việc)\s*["'“]?([^"'\n]+?)["'”]?\s+(?:thành|sang|thành\s*tên)\s*["'“]?([^"'\n]+?)["'”]?$/i
+    ) ||
+    text.match(
+      /(?:sửa|đổi\s*tên|cập\s*nhật|đổi)\s*(?:phân\s*chia|division|nhóm\s*việc)\s*["'“]?([^"'\n]+?)["'”]?\s+(?:thành|sang|thành\s*tên)\s*["'“]?([^"'\n]+?)["'”]?$/i
+    );
 
   if (updateDivisionMatch) {
     const rawTarget = updateDivisionMatch[1].trim();
@@ -1716,7 +1737,7 @@ export function parseLocalIntent(
       });
 
       return {
-        reply: `Đã chuẩn bị đề xuất đổi tên phân chia **"${matchedDiv.name}"** thành **"${newName}"**. Bạn hãy xác nhận bên dưới.`,
+        reply: `Tôi đã chuẩn bị đề xuất đổi tên phân chia **"${matchedDiv.name}"** thành **"${newName}"**. Bạn có đồng ý duyệt không? Bạn có thể nói "Duyệt" hoặc "Hủy".`,
         proposals,
       };
     }
@@ -1974,9 +1995,53 @@ export async function sendMascotChatMessage(params: {
     if (fallback.proposals.length > 0) {
       return fallback;
     }
-    // If no action matched and network failed, provide helpful message with error
+    if (fallback.reply && !fallback.reply.includes('Tôi là') && !fallback.reply.includes('Khi nào bạn cần ra lệnh')) {
+      return fallback;
+    }
+
+    const rawErrMsg = error?.message || 'Lỗi mạng';
+    let cleanErrMsg = rawErrMsg;
+    try {
+      const jsonMatch = rawErrMsg.match(/\{[\s\S]*"error"[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed?.error?.message) {
+          cleanErrMsg = parsed.error.message;
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    const isApiKeyError =
+      cleanErrMsg.includes('API Key') ||
+      cleanErrMsg.includes('401') ||
+      cleanErrMsg.includes('Chưa cấu hình') ||
+      cleanErrMsg.includes('UNAUTHENTICATED') ||
+      cleanErrMsg.includes('API_KEY');
+
+    const isQuotaError =
+      cleanErrMsg.includes('429') ||
+      cleanErrMsg.includes('RESOURCE_EXHAUSTED') ||
+      cleanErrMsg.includes('Quota exceeded') ||
+      cleanErrMsg.includes('hạn mức') ||
+      cleanErrMsg.includes('giới hạn');
+
+    const providerLabel = (settings.provider || 'gemini').toUpperCase();
+    let friendlyReply = '';
+    if (isApiKeyError) {
+      friendlyReply = `[${persona.name}]: Chưa kết nối được API ${providerLabel}. Bạn vui lòng bấm nút Cài đặt để kiểm tra hoặc nhập lại API Key nhé!`;
+    } else if (isQuotaError) {
+      // Extract retry delay if available
+      const retryMatch = cleanErrMsg.match(/retry in\s+([0-9.]+s?)/i) || cleanErrMsg.match(/retryDelay['":\s]+([0-9]+s)/i);
+      const retryHint = retryMatch && retryMatch[1] ? ` (vui lòng chờ khoảng ${retryMatch[1]} rồi thử lại)` : '';
+      friendlyReply = `[${persona.name}]: API Key của bạn đã đạt giới hạn yêu cầu (Rate limit / Quota 429)${retryHint}. Bạn vui lòng chờ một chút để hạn mức tự hồi phục hoặc nhập API Key khác trong phần Cài đặt Mascot nhé!`;
+    } else {
+      friendlyReply = `[${persona.name}]: Kết nối AI gặp gián đoạn (${cleanErrMsg}). Bạn có thể thử lại hoặc dùng các lệnh trực tiếp như 'tạo việc [tên]', 'đặt báo thức [tên]', v.v.`;
+    }
+
     return {
-      reply: `[${persona.name}]: Đã xảy ra lỗi kết nối AI: ${error.message || 'Lỗi mạng'}. Bạn có thể kiểm tra lại API Key trong mục Cài đặt Mascot, hoặc thử lại các câu lệnh trực tiếp như 'tạo task [tên]', 'đặt báo thức task [tên] lúc 09:00', v.v.`,
+      reply: friendlyReply,
       proposals: [],
     };
   }

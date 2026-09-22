@@ -47,9 +47,23 @@ function resolveTargetCluster(
     .filter((c) => c.division_id === divisionId)
     .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
 
-  // 2. All board modes available for this division (including presets)
-  const divBoardModes = (appOps.db.board_modes || []).filter(
-    (m) => m.division_id === divisionId || m.is_preset
+  // 2. All board modes available for this division (including presets and newly created in this batch)
+  const allBoardModes = [...(appOps.db.board_modes || [])];
+  if (
+    executionContext?.lastCreatedBoardModeId &&
+    executionContext?.boardModeClusters &&
+    !allBoardModes.some((m) => m.id === executionContext.lastCreatedBoardModeId)
+  ) {
+    allBoardModes.unshift({
+      id: executionContext.lastCreatedBoardModeId,
+      name: executionContext.lastCreatedBoardModeName || 'Chế độ bảng mới',
+      division_id: executionContext.lastCreatedDivisionId || divisionId,
+      clusters: executionContext.boardModeClusters,
+    } as any);
+  }
+
+  const divBoardModes = allBoardModes.filter(
+    (m) => m.division_id === divisionId || m.is_preset || m.id === executionContext?.lastCreatedBoardModeId
   );
 
   // Helper string cleaner
@@ -73,14 +87,33 @@ function resolveTargetCluster(
   let matchedBoardMode: any = undefined;
   let matchedModeCol: { id: string; name: string } | undefined = undefined;
 
-  // Check specified board_mode_id first if passed in details
-  if (details.board_mode_id) {
-    matchedBoardMode = (appOps.db.board_modes || []).find((m) => m.id === details.board_mode_id);
+  // 2a. If board_mode_name was explicitly passed (e.g. from create_board_mode + create_task batch)
+  if (details.board_mode_name) {
+    const bNameNorm = cleanStr(details.board_mode_name);
+    matchedBoardMode =
+      divBoardModes.find((m) => {
+        const mNorm = cleanStr(m.name);
+        return mNorm === bNameNorm || mNorm.includes(bNameNorm) || bNameNorm.includes(mNorm);
+      }) ||
+      (executionContext?.lastCreatedBoardModeName && cleanStr(executionContext.lastCreatedBoardModeName) === bNameNorm
+        ? divBoardModes.find((m) => m.id === executionContext.lastCreatedBoardModeId)
+        : undefined);
   }
 
-  // If query string exists, match against all Board Modes of this division
+  // 2b. Check specified board_mode_id if passed in details
+  if (!matchedBoardMode && details.board_mode_id) {
+    matchedBoardMode = allBoardModes.find((m) => m.id === details.board_mode_id);
+  }
+
+  // 2c. If a board mode was created in this execution batch for this division, prioritize it!
+  if (!matchedBoardMode && executionContext?.lastCreatedBoardModeId) {
+    matchedBoardMode = divBoardModes.find((m) => m.id === executionContext.lastCreatedBoardModeId);
+  }
+
+  // If query string exists, match against columns in the matched or all Board Modes of this division
+  const searchModes = matchedBoardMode ? [matchedBoardMode] : divBoardModes;
   if (qNorm) {
-    for (const bm of divBoardModes) {
+    for (const bm of searchModes) {
       const col = (bm.clusters || []).find((c: any) => {
         const cNorm = cleanStr(c.name);
         return cNorm === qNorm || cNorm.includes(qNorm) || qNorm.includes(cNorm);
@@ -95,7 +128,7 @@ function resolveTargetCluster(
 
   // Also check if fullContextText contains any column name of any board mode in this division
   if (!matchedModeCol) {
-    for (const bm of divBoardModes) {
+    for (const bm of searchModes) {
       for (const col of bm.clusters || []) {
         const cNorm = cleanStr(col.name);
         if (cNorm.length >= 2 && fullContextText.includes(cNorm)) {
@@ -111,13 +144,15 @@ function resolveTargetCluster(
   // If still no matched board mode, use executionContext, appOps.activeBoardModeId, or default division board mode
   const activeBoardModeId =
     (matchedBoardMode ? matchedBoardMode.id : undefined) ||
-    details.board_mode_id ||
     executionContext?.lastCreatedBoardModeId ||
+    (details.board_mode_id && allBoardModes.some((m) => m.id === details.board_mode_id)
+      ? details.board_mode_id
+      : undefined) ||
     appOps.activeBoardModeId ||
     (divBoardModes.length > 0 ? divBoardModes[0].id : 'kanban');
 
   if (!matchedBoardMode && activeBoardModeId && activeBoardModeId !== 'kanban') {
-    matchedBoardMode = (appOps.db.board_modes || []).find((m) => m.id === activeBoardModeId);
+    matchedBoardMode = allBoardModes.find((m) => m.id === activeBoardModeId);
   }
 
   const isKanban = !activeBoardModeId || activeBoardModeId === 'kanban';
@@ -130,7 +165,7 @@ function resolveTargetCluster(
     if (executionContext?.lastCreatedBoardModeId === activeBoardModeId && executionContext.boardModeClusters) {
       activeModeClusters = executionContext.boardModeClusters;
     } else {
-      const mode = (appOps.db.board_modes || []).find((m) => m.id === activeBoardModeId);
+      const mode = allBoardModes.find((m) => m.id === activeBoardModeId);
       if (mode && mode.clusters && mode.clusters.length > 0) {
         activeModeClusters = mode.clusters;
       }
@@ -401,9 +436,11 @@ export interface ProposalExecutionContext {
   lastCreatedDivisionId?: string;
   lastCreatedPeriodId?: string;
   lastCreatedBoardModeId?: string;
+  lastCreatedBoardModeName?: string;
   boardModeClusters?: Array<{ id: string; name: string }>;
   workspaceMap?: Map<string, string>;
   divisionMap?: Map<string, string>;
+  boardModeMap?: Map<string, string>;
 }
 
 export function executeActionProposal(
@@ -1298,7 +1335,11 @@ export function executeActionProposal(
 
         if (executionContext && newMode) {
           executionContext.lastCreatedBoardModeId = newMode.id;
+          executionContext.lastCreatedBoardModeName = newMode.name;
           executionContext.boardModeClusters = newMode.clusters;
+          if (executionContext.boardModeMap) {
+            executionContext.boardModeMap.set(modeName.toLowerCase(), newMode.id);
+          }
         }
         if (appOps.setActiveBoardModeId && newMode) {
           appOps.setActiveBoardModeId(newMode.id);

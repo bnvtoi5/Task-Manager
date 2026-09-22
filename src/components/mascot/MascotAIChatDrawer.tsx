@@ -18,6 +18,7 @@ import {
   Reply,
   CornerDownRight,
   Check,
+  Sparkles,
 } from 'lucide-react';
 import {
   MascotChatMessage,
@@ -179,6 +180,8 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
   const [isListening, setIsListening] = useState(false);
   const [liveTranscript, setLiveTranscript] = useState('');
   const [isVoiceOverlayOpen, setIsVoiceOverlayOpen] = useState(false);
+  const [pendingApprovalMsgId, setPendingApprovalMsgId] = useState<string | null>(null);
+  const [pendingApprovalQuestion, setPendingApprovalQuestion] = useState<string | null>(null);
 
   // UI Dialog states
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -199,14 +202,44 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
   const abortControllerRef = useRef<AbortController | null>(null);
   const recognizerRef = useRef<SpeechRecognitionController | null>(null);
   const isExplicitlyStoppedRef = useRef(false);
+  const liveTranscriptRef = useRef('');
   const lastSentVoiceTextRef = useRef<{ text: string; time: number }>({ text: '', time: 0 });
+  const handleSendMessageRef = useRef<((text?: string) => void) | null>(null);
+  const handleStartListeningForApprovalRef = useRef<((id: string) => void) | null>(null);
 
   // Save settings locally
+  const settingsRef = useRef<MascotAISettings>(settings);
+  settingsRef.current = settings;
+
   useEffect(() => {
     try {
       localStorage.setItem(AI_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
     } catch {}
   }, [settings]);
+
+  // Synchronize settings in real time from localStorage across components & windows
+  useEffect(() => {
+    const handleSync = () => {
+      try {
+        const saved = localStorage.getItem(AI_SETTINGS_STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          setSettings((prev) => ({ ...prev, ...parsed }));
+          if (parsed.personaId) {
+            setSelectedPersonaId(parsed.personaId);
+          }
+        }
+      } catch {}
+    };
+
+    handleSync();
+    window.addEventListener('mascot_settings_changed', handleSync);
+    window.addEventListener('storage', handleSync);
+    return () => {
+      window.removeEventListener('mascot_settings_changed', handleSync);
+      window.removeEventListener('storage', handleSync);
+    };
+  }, [isOpen]);
 
   // Save chat history locally
   useEffect(() => {
@@ -301,7 +334,7 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
   };
 
   // Text-to-Speech Play/Stop helper
-  const handleToggleSpeak = (text: string, msgId?: string) => {
+  const handleToggleSpeak = (text: string, msgId?: string, onSpeechEnd?: () => void) => {
     if (isSpeaking && (!msgId || speakingMessageId === msgId)) {
       isExplicitlyStoppedRef.current = true;
       stopSpeaking();
@@ -320,6 +353,11 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
       onEnd: () => {
         setIsSpeaking(false);
         setSpeakingMessageId(null);
+
+        if (onSpeechEnd) {
+          onSpeechEnd();
+          return;
+        }
 
         // ONLY re-arm microphone if NOT explicitly stopped by user!
         if (
@@ -416,8 +454,99 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
     }
   };
 
+  // Build natural verbal prompt asking user to confirm proposal
+  const buildSpokenProposalPrompt = (proposals: ActionProposal[]): string => {
+    if (!proposals || proposals.length === 0) return '';
+    if (proposals.length === 1) {
+      const p = proposals[0];
+      const d = p.details || {};
+      const target = (p.target_name || d.name || d.title || '').trim();
+      let actionDesc = '';
+      switch (p.action) {
+        case 'create_division':
+          actionDesc = `tạo phân chia mới ${target ? `"${target}"` : ''}`;
+          break;
+        case 'delete_division':
+          actionDesc = `xóa phân chia ${target ? `"${target}"` : ''}`;
+          break;
+        case 'update_division':
+          actionDesc = `đổi tên phân chia ${target ? `"${target}"` : ''}`;
+          break;
+        case 'create_task':
+          actionDesc = `tạo công việc ${target ? `"${target}"` : ''}`;
+          break;
+        case 'delete_task':
+          actionDesc = `xóa công việc ${target ? `"${target}"` : ''}`;
+          break;
+        case 'update_task':
+          actionDesc = `cập nhật công việc ${target ? `"${target}"` : ''}`;
+          break;
+        case 'move_task':
+          actionDesc = `chuyển công việc ${target ? `"${target}"` : ''}`;
+          break;
+        case 'set_alarm':
+          actionDesc = `hẹn giờ báo thức cho công việc ${target ? `"${target}"` : ''}`;
+          break;
+        case 'cancel_alarm':
+          actionDesc = `tắt báo thức cho công việc ${target ? `"${target}"` : ''}`;
+          break;
+        case 'create_cluster':
+          actionDesc = `tạo cụm mới ${target ? `"${target}"` : ''}`;
+          break;
+        case 'delete_cluster':
+          actionDesc = `xóa cụm ${target ? `"${target}"` : ''}`;
+          break;
+        case 'create_board_mode':
+          actionDesc = `tạo chế độ bảng ${target ? `"${target}"` : ''}`;
+          break;
+        case 'delete_board_mode':
+          actionDesc = `xóa chế độ bảng ${target ? `"${target}"` : ''}`;
+          break;
+        case 'create_period':
+          actionDesc = `tạo chu kỳ mới ${target ? `"${target}"` : ''}`;
+          break;
+        case 'delete_period':
+          actionDesc = `xóa chu kỳ ${target ? `"${target}"` : ''}`;
+          break;
+        case 'create_workspace':
+          actionDesc = `tạo phòng làm việc ${target ? `"${target}"` : ''}`;
+          break;
+        case 'delete_workspace':
+          actionDesc = `xóa phòng làm việc ${target ? `"${target}"` : ''}`;
+          break;
+        default:
+          actionDesc = p.summary || 'thực hiện thao tác này';
+      }
+      return `Xin hãy xác nhận hành động: ${actionDesc.trim()}. `;
+    }
+
+    // Multiple proposals: provide a clear, concise summary of all actions
+    const hasBoardMode = proposals.find((p) => p.action === 'create_board_mode');
+    const hasDivision = proposals.find((p) => p.action === 'create_division');
+    const taskCount = proposals.filter((p) => p.action === 'create_task').length;
+
+    const parts: string[] = [];
+    if (hasDivision) {
+      const dName = (hasDivision.target_name || hasDivision.details?.name || '').trim();
+      parts.push(`tạo phân chia ${dName ? `"${dName}"` : 'mới'}`);
+    }
+    if (hasBoardMode) {
+      const bmName = (hasBoardMode.target_name || hasBoardMode.details?.name || '').trim();
+      parts.push(`tạo chế độ bảng ${bmName ? `"${bmName}"` : ''}`);
+    }
+    if (taskCount > 0) {
+      parts.push(`tạo ${taskCount} công việc mới`);
+    }
+    if (parts.length > 0) {
+      return `Xin hãy xác nhận hành động: ${parts.join(', ')}. `;
+    }
+
+    return `Xin hãy xác nhận ${proposals.length} hành động đề xuất. `;
+  };
+
   // Send message handler
   const handleSendMessage = async (textToSend?: string) => {
+    handleSendMessageRef.current = handleSendMessage;
     const text = (textToSend || inputVal).trim();
     if (!text || isLoading) return;
 
@@ -601,12 +730,14 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
 
     // Check for Voice / Text Approval or Rejection of pending proposals
     const trimmedInput = text.trim();
-    const isApprovalCommand = /^(duyệt|đồng ý|xác nhận|thực hiện|chấp nhận|ok duyệt|duyệt đi|duyệt tất cả|duyệt hết|yes|approve|confirm)(\s+hết|\s+tất cả|\s+đi|\s+nha|\s+nhé)?[\.!]?$/i.test(trimmedInput);
-    const isRejectionCommand = /^(hủy|hủy bỏ|không duyệt|từ chối|bỏ qua|cancel|reject)(\s+hết|\s+tất cả|\s+đi|\s+nha|\s+nhé)?[\.!]?$/i.test(trimmedInput);
+    const isApprovalCommand = /^(?:có\s+duyệt|duyệt|đồng\s*ý|xác\s*nhận|thực\s*hiện|chấp\s*nhận|ok\s*duyệt|ok|oke|okay|yes|approve|confirm|triển\s*khai|làm\s*đi|làm\s*luôn|chuẩn\s*rồi|được\s*rồi|ừ\s*duyệt|ừ|dạ\s*duyệt|dạ\s*có|có)(\s+hết|\s+tất\s*cả|\s+đi|\s+luôn|\s+nha|\s+nhé|\s+ạ)?[\.!]?$/i.test(trimmedInput);
+    const isRejectionCommand = /^(?:không\s+duyệt|hủy|hủy\s*bỏ|từ\s*chối|bỏ\s*qua|không|thôi|đừng|đừng\s*làm|cancel|reject|dừng|bỏ)(\s+hết|\s+tất\s*cả|\s+đi|\s+nha|\s+nhé|\s+ạ)?[\.!]?$/i.test(trimmedInput);
 
     if (isApprovalCommand || isRejectionCommand) {
       const pendingMsg = [...messages].reverse().find((m) => m.proposals?.some((p) => !p.status || p.status === 'pending'));
       if (pendingMsg) {
+        setPendingApprovalQuestion(null);
+        setPendingApprovalMsgId(null);
         const userMsg: MascotChatMessage = {
           id: `msg-${Date.now()}`,
           role: 'user',
@@ -626,18 +757,10 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
             timestamp: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
           };
           setMessages((prev) => [...prev, botMsg]);
-          if (settings.autoSpeak || isVoiceOverlayOpen) {
-            handleToggleSpeak(confirmReply, botMsg.id);
-          }
+          handleToggleSpeak('Đã duyệt và thực thi thành công!', botMsg.id);
           return;
         } else {
-          setMessages((prevMessages) =>
-            prevMessages.map((msg) => {
-              if (msg.id !== pendingMsg.id || !msg.proposals) return msg;
-              const updated = msg.proposals.map((p) => ({ ...p, status: 'rejected' as const }));
-              return { ...msg, proposals: updated };
-            })
-          );
+          handleRejectAllProposals(pendingMsg.id);
           const cancelReply = 'Đã hủy các đề xuất thao tác theo lệnh của bạn.';
           const botMsg: MascotChatMessage = {
             id: `msg-${Date.now() + 1}`,
@@ -646,9 +769,7 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
             timestamp: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
           };
           setMessages((prev) => [...prev, botMsg]);
-          if (settings.autoSpeak || isVoiceOverlayOpen) {
-            handleToggleSpeak(cancelReply, botMsg.id);
-          }
+          handleToggleSpeak('Đã hủy đề xuất theo ý bạn.', botMsg.id);
           return;
         }
       }
@@ -689,10 +810,19 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
         messageToSend = `[Đang trả lời tin nhắn của ${activeReplyContext.senderName || 'đối phương'}: "${cleanSnippet}..."]\n${text}`;
       }
 
+      // Refresh settings directly from localStorage to ensure latest API key and provider
+      let activeSettings = settingsRef.current || settings;
+      try {
+        const fresh = localStorage.getItem(AI_SETTINGS_STORAGE_KEY);
+        if (fresh) {
+          activeSettings = { ...activeSettings, ...JSON.parse(fresh) };
+        }
+      } catch {}
+
       const response = await sendMascotChatMessage({
         message: messageToSend,
         persona: activePersona,
-        settings,
+        settings: activeSettings,
         context,
         chatHistory: messages,
         signal: abortControllerRef.current.signal,
@@ -718,8 +848,20 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
         showToast(response.systemFallbackNotice);
       }
 
-      // If Auto TTS or Voice Mode is active, read the assistant response aloud
-      if ((settings.autoSpeak || isVoiceOverlayOpen) && response.reply && !response.aborted) {
+      // Check if this message has action proposals that require user confirmation
+      const hasProposals = assistantMsg.proposals && assistantMsg.proposals.length > 0;
+      if (hasProposals) {
+        const spokenQuestion = buildSpokenProposalPrompt(assistantMsg.proposals!);
+        setPendingApprovalMsgId(assistantMsg.id);
+        setPendingApprovalQuestion(spokenQuestion);
+
+        // Always verbally ask user to approve when proposals are generated!
+        if (!response.aborted) {
+          handleToggleSpeak(spokenQuestion, assistantMsg.id, () => {
+            handleStartListeningForApprovalRef.current?.(assistantMsg.id);
+          });
+        }
+      } else if ((settings.autoSpeak || isVoiceOverlayOpen) && response.reply && !response.aborted) {
         handleToggleSpeak(response.reply, assistantMsg.id);
       }
     } catch (err: any) {
@@ -757,14 +899,28 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
     const recognizer = createSpeechRecognizer({
       lang: recLang,
       continuous: true, // Continuous listening so brief pauses don't cut off!
-      silenceTimeoutMs: 3500, // 3.5s silence grace period
+      silenceTimeoutMs: 3500, // 3.5s natural speaking pause grace period -> comfortable, không bị chớp tắt!
       onStart: () => {
         setIsListening(true);
+        liveTranscriptRef.current = '';
+        setLiveTranscript('');
       },
-      onResult: (transcript) => {
+      onResult: (transcript, isFinal) => {
+        liveTranscriptRef.current = transcript;
         setLiveTranscript(transcript);
         setInputVal(transcript);
-        // Do not auto-send blindly! Allow user to review, edit, or approve before sending.
+
+        // Directly send when speech recognition completes or silence grace timer expires!
+        if (isFinal && transcript.trim()) {
+          try {
+            recognizer.abort();
+          } catch (e) {}
+          setIsListening(false);
+          liveTranscriptRef.current = '';
+          setLiveTranscript('');
+          setInputVal('');
+          handleSendMessage(transcript.trim());
+        }
       },
       onError: (errMsg) => {
         setIsListening(false);
@@ -787,6 +943,15 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
       recognizerRef.current?.stop();
     } catch (e) {}
     setIsListening(false);
+
+    // If user tapped stop to end speech and there's text spoken, auto-send immediately!
+    const textToSend = liveTranscriptRef.current.trim() || liveTranscript.trim() || inputVal.trim();
+    if (textToSend) {
+      liveTranscriptRef.current = '';
+      setLiveTranscript('');
+      setInputVal('');
+      handleSendMessage(textToSend);
+    }
   };
 
   // Execute a single proposal
@@ -908,12 +1073,15 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
       lastCreatedDivisionId?: string;
       lastCreatedPeriodId?: string;
       lastCreatedBoardModeId?: string;
+      lastCreatedBoardModeName?: string;
       boardModeClusters?: Array<{ id: string; name: string }>;
       workspaceMap: Map<string, string>;
       divisionMap: Map<string, string>;
+      boardModeMap: Map<string, string>;
     } = {
       workspaceMap: new Map(),
       divisionMap: new Map(),
+      boardModeMap: new Map(),
     };
 
     try {
@@ -978,6 +1146,10 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
     } catch (err: any) {
       showToast(`✕ Lỗi khi thực hiện: ${err?.message || 'Không xác định'}`);
     } finally {
+      if (pendingApprovalMsgId === messageId) {
+        setPendingApprovalMsgId(null);
+        setPendingApprovalQuestion(null);
+      }
       pendingProposals.forEach((p) => executingRef.current.delete(p.id));
       setExecutingProposalIds(new Set(executingRef.current));
     }
@@ -985,6 +1157,10 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
 
   // Reject all proposals
   const handleRejectAllProposals = (messageId: string) => {
+    if (pendingApprovalMsgId === messageId) {
+      setPendingApprovalMsgId(null);
+      setPendingApprovalQuestion(null);
+    }
     setMessages((prevMessages) =>
       prevMessages.map((msg) => {
         if (msg.id !== messageId || !msg.proposals) return msg;
@@ -997,6 +1173,91 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
     );
     showToast('Đã hủy tất cả thao tác trong đề xuất.');
   };
+
+  // Dedicated voice recognition handler when AI is awaiting user's verbal confirmation
+  const handleStartListeningForApproval = (targetMsgId: string) => {
+    isExplicitlyStoppedRef.current = false;
+    stopSpeaking();
+    setIsSpeaking(false);
+    setSpeakingMessageId(null);
+
+    try {
+      recognizerRef.current?.abort();
+    } catch (e) {}
+
+    const recLang = settings.voiceLanguage === 'en' ? 'en-US' : 'vi-VN';
+    const recognizer = createSpeechRecognizer({
+      lang: recLang,
+      continuous: true,
+      silenceTimeoutMs: 5000,
+      onStart: () => {
+        setIsListening(true);
+        setLiveTranscript('');
+      },
+      onResult: (resultText, isFinal) => {
+        setLiveTranscript(resultText);
+        const text = resultText.trim().toLowerCase();
+        const isApprove = /^(?:ok|oke|okay|có\s+duyệt|duyệt|đồng\s*ý|xác\s*nhận|thực\s*hiện|chấp\s*nhận|ok\s*duyệt|yes|approve|confirm|triển\s*khai|làm\s*đi|làm\s*luôn|chuẩn\s*rồi|được\s*rồi|ừ\s*duyệt|ừ|dạ\s*duyệt|dạ\s*có|có)(\s+hết|\s+tất\s*cả|\s+đi|\s+luôn|\s+nha|\s+nhé|\s+ạ)?[\.!]?$/i.test(text);
+        const isReject = /^(?:không|ko|k|không\s+duyệt|hủy|hủy\s*bỏ|từ\s*chối|bỏ\s*qua|thôi|đừng|đừng\s*làm|cancel|reject|dừng|bỏ)(\s+hết|\s+tất\s*cả|\s+đi|\s+nha|\s+nhé|\s+ạ)?[\.!]?$/i.test(text);
+
+        if (isApprove || isReject) {
+          try {
+            recognizer.abort();
+          } catch (e) {}
+          setIsListening(false);
+          setLiveTranscript('');
+          setPendingApprovalQuestion(null);
+          setPendingApprovalMsgId(null);
+
+          if (isApprove) {
+            handleExecuteAllProposals(targetMsgId);
+            const confirmMsg = '✅ Đã xác nhận OK và thực thi thành công!';
+            const botMsg: MascotChatMessage = {
+              id: `msg-${Date.now()}`,
+              role: 'assistant',
+              content: confirmMsg,
+              timestamp: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+            };
+            setMessages((prev) => [...prev, botMsg]);
+            handleToggleSpeak('Đã xác nhận OK và thực thi thành công!', botMsg.id);
+          } else {
+            handleRejectAllProposals(targetMsgId);
+            const cancelMsg = 'Đã chọn Không và hủy các đề xuất thao tác.';
+            const botMsg: MascotChatMessage = {
+              id: `msg-${Date.now()}`,
+              role: 'assistant',
+              content: cancelMsg,
+              timestamp: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+            };
+            setMessages((prev) => [...prev, botMsg]);
+            handleToggleSpeak('Đã hủy đề xuất', botMsg.id);
+          }
+        } else if (isFinal && text) {
+          try {
+            recognizer.abort();
+          } catch (e) {}
+          setIsListening(false);
+          setLiveTranscript('');
+          setPendingApprovalQuestion(null);
+          setPendingApprovalMsgId(null);
+          handleSendMessageRef.current?.(resultText);
+        }
+      },
+      onError: () => {
+        setIsListening(false);
+      },
+      onEnd: () => {
+        setIsListening(false);
+      },
+    });
+
+    if (recognizer) {
+      recognizerRef.current = recognizer;
+      recognizer.start();
+    }
+  };
+
+  handleStartListeningForApprovalRef.current = handleStartListeningForApproval;
 
   // Copy text helper
   const handleCopy = (text: string, id: string) => {
@@ -1117,37 +1378,6 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
           </button>
         </div>
       </div>
-
-      {/* Voice Mode Overlay (ChatGPT Voice Mode) */}
-      <MascotVoiceModeOverlay
-        isOpen={isVoiceOverlayOpen}
-        onClose={() => setIsVoiceOverlayOpen(false)}
-        activePersona={activePersona}
-        settings={settings}
-        isLoading={isLoading}
-        isSpeaking={isSpeaking}
-        isListening={isListening}
-        currentTranscript={liveTranscript}
-        lastAiResponse={
-          messages.filter((m) => m.role === 'assistant').slice(-1)[0]?.content
-        }
-        onStartListening={handleStartListening}
-        onStopListening={handleStopListening}
-        onStopAll={handleStopAll}
-        onSelectLanguage={(lang) => {
-          setSettings((prev) => ({ ...prev, voiceLanguage: lang }));
-          showToast(`Đã chuyển giọng nói sang: ${lang === 'vi' ? '🇻🇳 Tiếng Việt' : '🇬🇧 English'}`);
-        }}
-        onConfirmVoiceSend={(text) => {
-          setLiveTranscript('');
-          setInputVal('');
-          handleSendMessage(text);
-        }}
-        onCancelVoice={() => {
-          setLiveTranscript('');
-          setInputVal('');
-        }}
-      />
 
       {/* CHAT MESSAGES LIST */}
       <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -1466,6 +1696,58 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
           </div>
         )}
 
+        {/* VOICE ACTION PROPOSAL CONFIRMATION BAR */}
+        {pendingApprovalQuestion && (
+          <div className="mx-3 mb-1.5 p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/50 border-2 border-amber-400/70 dark:border-amber-700 shadow-md text-xs space-y-2 animate-in slide-in-from-bottom-2">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-amber-900 dark:text-amber-200 font-bold">
+                <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
+                <span>AI đang hỏi bạn xác nhận:</span>
+              </div>
+              {isListening && (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300 font-semibold flex items-center gap-1 shrink-0 animate-pulse">
+                  <Mic className="w-3 h-3 text-rose-600" />
+                  <span>Đang nghe bạn nói &ldquo;OK&rdquo; / &ldquo;Không&rdquo;...</span>
+                </span>
+              )}
+            </div>
+            <p className="font-semibold text-slate-900 dark:text-slate-100 text-xs leading-relaxed">
+              {pendingApprovalQuestion}
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  if (pendingApprovalMsgId) {
+                    handleExecuteAllProposals(pendingApprovalMsgId);
+                    setPendingApprovalQuestion(null);
+                    setPendingApprovalMsgId(null);
+                    handleToggleSpeak('Đã xác nhận OK và thực thi thành công!');
+                  }
+                }}
+                className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-xs flex items-center gap-1 shadow-xs transition active:scale-95 cursor-pointer"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>OK</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (pendingApprovalMsgId) {
+                    handleRejectAllProposals(pendingApprovalMsgId);
+                    setPendingApprovalQuestion(null);
+                    setPendingApprovalMsgId(null);
+                    handleToggleSpeak('Đã hủy đề xuất');
+                  }
+                }}
+                className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-rose-100 hover:text-rose-700 dark:hover:bg-rose-950/60 text-slate-700 dark:text-slate-300 font-semibold text-xs transition cursor-pointer"
+              >
+                Không
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* VOICE ACTIVE LISTENING BAR */}
         {isListening && (
           <div className="mx-3 mb-1 px-3.5 py-2 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 flex items-center justify-between gap-2 text-xs animate-pulse">
@@ -1654,6 +1936,55 @@ export const MascotAIChatDrawer: React.FC<MascotAIChatDrawerProps> = ({
           window.dispatchEvent(new CustomEvent('mascot_settings_changed'));
         }}
         onShowToast={showToast}
+      />
+
+      {/* ================= VOICE MODE FULLSCREEN OVERLAY ================= */}
+      <MascotVoiceModeOverlay
+        isOpen={isVoiceOverlayOpen}
+        onClose={() => setIsVoiceOverlayOpen(false)}
+        activePersona={activePersona}
+        settings={settings}
+        isLoading={isLoading}
+        isSpeaking={isSpeaking}
+        isListening={isListening}
+        currentTranscript={liveTranscript}
+        lastAiResponse={
+          [...messages].reverse().find((m) => m.role === 'assistant')?.content
+        }
+        pendingProposalQuestion={pendingApprovalQuestion}
+        onApprovePendingProposals={() => {
+          if (pendingApprovalMsgId) {
+            handleExecuteAllProposals(pendingApprovalMsgId);
+            setPendingApprovalQuestion(null);
+            setPendingApprovalMsgId(null);
+            handleToggleSpeak('Đã duyệt và thực thi thành công!');
+          }
+        }}
+        onRejectPendingProposals={() => {
+          if (pendingApprovalMsgId) {
+            handleRejectAllProposals(pendingApprovalMsgId);
+            setPendingApprovalQuestion(null);
+            setPendingApprovalMsgId(null);
+            handleToggleSpeak('Đã hủy đề xuất theo ý bạn.');
+          }
+        }}
+        onStartListening={handleStartListening}
+        onStopListening={handleStopListening}
+        onStopAll={handleStopAll}
+        onSelectLanguage={(lang) => {
+          setSettings((s) => ({ ...s, voiceLanguage: lang }));
+        }}
+        onConfirmVoiceSend={(txt) => {
+          setLiveTranscript('');
+          setInputVal('');
+          handleSendMessage(txt);
+        }}
+        onCancelVoice={() => {
+          setLiveTranscript('');
+          setInputVal('');
+          handleStopListening();
+        }}
+        onOpenSettings={() => setIsSettingsOpen(true)}
       />
     </div>
   );

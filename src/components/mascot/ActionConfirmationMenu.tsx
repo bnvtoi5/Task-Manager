@@ -73,12 +73,12 @@ export const ActionConfirmationMenu: React.FC<ActionConfirmationMenuProps> = ({
         const text = transcript.trim().toLowerCase();
         setVoiceHint(`Nghe được: "${transcript}"`);
 
-        if (/^(duyệt|đồng ý|xác nhận|thực hiện|ok|chấp nhận|yes|approve|confirm)/i.test(text)) {
+        if (/^(?:có\s+duyệt|duyệt|đồng\s*ý|xác\s*nhận|thực\s*hiện|chấp\s*nhận|ok\s*duyệt|ok|oke|okay|yes|approve|confirm|triển\s*khai|làm\s*đi|làm\s*luôn|chuẩn\s*rồi|được\s*rồi|ừ\s*duyệt|ừ|dạ\s*duyệt|dạ\s*có|có)(\s+hết|\s+tất\s*cả|\s+đi|\s+luôn|\s+nha|\s+nhé|\s+ạ)?[\.!]?$/i.test(text)) {
           setIsVoiceListening(false);
           setVoiceHint('✅ Đã nhận lệnh DUYỆT!');
           recognizer?.stop();
           handleAllConfirm();
-        } else if (/^(hủy|từ chối|không duyệt|bỏ qua|cancel|reject)/i.test(text)) {
+        } else if (/^(?:không\s+duyệt|hủy|hủy\s*bỏ|từ\s*chối|bỏ\s*qua|không|thôi|đừng|đừng\s*làm|cancel|reject|dừng|bỏ)(\s+hết|\s+tất\s*cả|\s+đi|\s+nha|\s+nhé|\s+ạ)?[\.!]?$/i.test(text)) {
           setIsVoiceListening(false);
           setVoiceHint('✕ Đã nhận lệnh HỦY!');
           recognizer?.stop();

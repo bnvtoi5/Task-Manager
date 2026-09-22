@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   XCircle,
   AlertTriangle,
+  AlertCircle,
   Loader2,
   Activity,
   Wifi,
@@ -303,6 +304,12 @@ export const MascotSettingsModal: React.FC<MascotSettingsModalProps> = ({
 
     if (res.ok) {
       onShowToast(`✓ ${res.message} (${res.latencyMs || 0}ms)`);
+      // Auto-save verified key to ensure user doesn't lose it if they close the modal
+      onSaveSettings(localSettings);
+      try {
+        localStorage.setItem('page_mascot_ai_settings_v1', JSON.stringify(localSettings));
+        window.dispatchEvent(new CustomEvent('mascot_settings_changed', { detail: localSettings }));
+      } catch {}
     } else {
       onShowToast(`✕ ${res.message}`);
     }
@@ -355,6 +362,10 @@ export const MascotSettingsModal: React.FC<MascotSettingsModalProps> = ({
   // Save all settings
   const handleSaveAndClose = () => {
     onSaveSettings(localSettings);
+    try {
+      localStorage.setItem('page_mascot_ai_settings_v1', JSON.stringify(localSettings));
+      window.dispatchEvent(new CustomEvent('mascot_settings_changed', { detail: localSettings }));
+    } catch {}
     onShowToast('Đã lưu cấu hình AI cá nhân!');
     onClose();
   };
@@ -681,26 +692,43 @@ export const MascotSettingsModal: React.FC<MascotSettingsModalProps> = ({
 
                 {/* API Key Status & Clear Action */}
                 {currentProvider.id === 'gemini' && (
-                  <div>
+                  <div className="space-y-1.5 pt-1">
                     {!localSettings.apiKey ? (
-                      <div className="flex items-center gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
-                        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                        <span>Đang sử dụng API Key mặc định của hệ thống Google AI Studio (Hoàn toàn miễn phí).</span>
+                      <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-400/40 text-xs space-y-1 text-amber-900 dark:text-amber-200">
+                        <div className="flex items-center gap-1.5 font-bold text-amber-800 dark:text-amber-300">
+                          <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
+                          <span>Chưa nhập Gemini API Key</span>
+                        </div>
+                        <p className="text-[11px] text-neutral-600 dark:text-neutral-400 leading-relaxed">
+                          Nhập Gemini API Key cá nhân để trợ lý thoại phản hồi ổn định và không bị giới hạn lưu lượng.
+                        </p>
+                        <div className="pt-0.5">
+                          <a
+                            href="https://aistudio.google.com/app/apikey"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-600 dark:text-emerald-400 hover:underline"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            <span>Lấy API Key miễn phí tại Google AI Studio ↗</span>
+                          </a>
+                        </div>
                       </div>
                     ) : (
                       <div className="flex items-center justify-between text-[11px] pt-0.5">
-                        <span className="text-neutral-500 dark:text-neutral-400 flex items-center gap-1">
-                          <Key className="w-3 h-3 text-emerald-500" /> Đang dùng khóa cá nhân tùy chỉnh
+                        <span className="text-emerald-700 dark:text-emerald-400 flex items-center gap-1 font-medium">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                          <span>Đã lưu API Key cá nhân của bạn</span>
                         </span>
                         <button
                           type="button"
                           onClick={() => {
                             setLocalSettings((s) => ({ ...s, apiKey: '' }));
-                            onShowToast('Đã xóa key cá nhân, chuyển sang dùng API Key mặc định hệ thống!');
+                            onShowToast('Đã xóa key cá nhân');
                           }}
-                          className="text-rose-500 hover:text-rose-600 dark:text-rose-400 font-medium hover:underline flex items-center gap-1"
+                          className="text-rose-500 hover:text-rose-600 dark:text-rose-400 font-medium hover:underline flex items-center gap-1 cursor-pointer"
                         >
-                          Xóa để dùng key mặc định
+                          Xóa key
                         </button>
                       </div>
                     )}

@@ -18,6 +18,82 @@ async function startServer() {
   // In-memory circuit breaker to prevent repeated 503 lag spikes during peak hours
   const congestedModels = new Map<string, number>();
 
+  // Helper to extract clean and friendly messages from AI SDK errors without dumping raw JSON
+  const formatAiErrorResponse = (rawErr: unknown, modelName: string) => {
+    const rawMsg = rawErr instanceof Error ? rawErr.message : String(rawErr);
+    let parsedGoogleMsg = rawMsg;
+    try {
+      const jsonMatch = rawMsg.match(/\{[\s\S]*"error"[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed?.error?.message) {
+          parsedGoogleMsg = parsed.error.message;
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    const checkStr = parsedGoogleMsg.toLowerCase();
+    if (
+      checkStr.includes('429') ||
+      checkStr.includes('resource_exhausted') ||
+      checkStr.includes('quota exceeded') ||
+      checkStr.includes('free_tier_requests') ||
+      checkStr.includes('rate-limit')
+    ) {
+      let retryDelay = '';
+      const retryMatch =
+        parsedGoogleMsg.match(/retry in\s+([0-9.]+s?)/i) ||
+        parsedGoogleMsg.match(/retryDelay['":\s]+([0-9]+s)/i);
+      if (retryMatch && retryMatch[1]) {
+        retryDelay = `(vui lòng chờ khoảng ${retryMatch[1]} rồi gửi tiếp). `;
+      }
+      const isZeroLimit = checkStr.includes('limit: 0');
+      const zeroLimitNotice = isZeroLimit
+        ? ` Mô hình "${modelName}" yêu cầu tài khoản Google Cloud có gắn thanh toán (Billing) hoặc chưa được cấp hạn mức miễn phí.`
+        : '';
+      return {
+        statusCode: 429,
+        rateLimited: true,
+        message: `Mô hình "${modelName}" đã chạm giới hạn yêu cầu (Rate limit / Quota 429) ${retryDelay}${zeroLimitNotice}Bạn có thể đợi vài giây để hạn mức tự hồi phục hoặc đổi sang API Key khác trong phần Cài đặt Mascot.`,
+      };
+    }
+
+    if (checkStr.includes('503') || checkStr.includes('unavailable')) {
+      return {
+        statusCode: 503,
+        message: `Cụm máy chủ Google Gemini cho mô hình "${modelName}" đang quá tải tạm thời (503 Service Unavailable). Vui lòng thử lại sau vài giây hoặc chọn "Gemini 3.1 Flash-Lite".`,
+      };
+    }
+
+    if (
+      checkStr.includes('api_key_invalid') ||
+      checkStr.includes('api key not valid') ||
+      checkStr.includes('unauthenticated') ||
+      checkStr.includes('401')
+    ) {
+      return {
+        statusCode: 401,
+        apiKeyInvalid: true,
+        message:
+          'Gemini API Key không hợp lệ hoặc đã bị vô hiệu hóa. Vui lòng kiểm tra lại API Key trong mục Cài đặt Mascot.',
+      };
+    }
+
+    if (checkStr.includes('404') || checkStr.includes('not found') || checkStr.includes('not supported')) {
+      return {
+        statusCode: 404,
+        message: `Mô hình "${modelName}" không tồn tại hoặc tài khoản của bạn chưa được cấp quyền sử dụng. Hãy chọn "Gemini 3.1 Flash-Lite" hoặc "Gemini Flash Latest".`,
+      };
+    }
+
+    return {
+      statusCode: 500,
+      message: `Lỗi kết nối AI (${modelName}): ${parsedGoogleMsg.length > 220 ? parsedGoogleMsg.slice(0, 220) + '...' : parsedGoogleMsg}`,
+    };
+  };
+
   // Mascot AI Chat Route
   app.post('/api/mascot/chat', async (req, res) => {
     try {
@@ -44,22 +120,6 @@ async function startServer() {
       let activeKey = userKey || systemKey;
       let fallbackKey = userKey && systemKey && userKey !== systemKey ? systemKey : '';
       let usedSystemFallbackKey = false;
-
-      if (!activeKey) {
-        return res.status(400).json({
-          error:
-            'Chưa cấu hình API Key. Vui lòng nhập Gemini API Key trong phần Cài đặt Mascot hoặc thiết lập GEMINI_API_KEY.',
-        });
-      }
-
-      let ai = new GoogleGenAI({
-        apiKey: activeKey,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
-        },
-      });
 
       // Construct system instruction combining Persona, Fixed Response Template & Workspace Domain Engine
       const systemInstruction = `
@@ -222,26 +282,23 @@ QUY TẮC PHÂN BIỆT RÕ RÀNG GIỮA PERIOD VÀ DIVISION (CỰC KỲ QUAN TR�
    - Tất cả các thao tác thay đổi dữ liệu đều KHÔNG ĐƯỢC chạy ngầm. Phải đưa vào danh sách proposals để người dùng duyệt trên giao diện.
    - Mỗi proposal phải có "status": "pending".
 
-8. QUY TẮC ĐÚNG VÀ ĐỦ QUY TRÌNH - BẮT BUỘC KIỂM TRA CHẾ ĐỘ BẢNG (BOARD MODE) TRƯỚC KHI TẠO CÔNG VIỆC:
+8. QUY TẮC THIẾT LẬP CHẾ ĐỘ BẢNG (BOARD MODE) VÀ TẠO CÔNG VIỆC:
 - Cấu trúc thứ bậc của hệ thống:
   1. Phòng làm việc (Workspace)
   2. Chu kỳ (Period)
   3. Phân chia (Division)
   4. Chế độ bảng (Board Mode) và các Cột/Cụm Kanban (BoardModeCluster)
   5. Công việc (Task)
-- "Chế độ bảng" (Board Mode) là điều kiện tiên quyết bắt buộc để hiển thị các cụm cột và sắp xếp công việc trên bảng Kanban của một Phân chia. Nếu một Phân chia CHƯA CÓ Chế độ bảng (active_division_has_board_mode === false hoặc không có chế độ bảng nào thuộc division đó trong division_board_modes / board_modes), thì:
-  * TUYỆT ĐỐI KHÔNG ĐƯỢC TẠO TASK TRƯỚC KHI CÓ CHẾ ĐỘ BẢNG! Tạo task khi chưa có chế độ bảng là SAI QUY TRÌNH và sẽ khiến phân chia không hiển thị được việc.
-  * PHẢI THỰC HIỆN ĐÚNG VÀ ĐỦ QUY TRÌNH:
-    1. Khi người dùng yêu cầu thiết lập công việc cho một phòng/phân chia mới hoặc chưa có chế độ bảng (ví dụ: "tạo các nhiệm vụ quan trọng cho phòng ban lập trình máy tính", "lên danh sách việc cho phòng IT", "tạo việc cho phân chia X"):
-       - Bạn PHẢI giải thích rõ ràng cho người dùng: Phân chia hiện tại chưa có Chế độ bảng (Board Mode) để phân chia các cột công việc. Theo đúng quy trình vận hành, cần thiết lập Chế độ bảng trước (ví dụ Chế độ bảng "Kanban Lập trình" gồm các cột: Cần làm, Đang làm, Kiểm thử, Hoàn thành), sau đó mới tạo các nhiệm vụ tương ứng vào các cột đó.
-       - Bạn có thể gợi ý/hỏi người dùng: "Phân chia này hiện chưa có chế độ bảng, bạn có muốn đặt tên chế độ bảng theo ý mình không, hay tớ sẽ tạo Chế độ bảng [Tên gợi ý] với các cột chuẩn quy trình cho bạn nhé?".
-       - Trong danh sách proposals, bạn BẮT BUỘC phải đặt proposal create_board_mode TRƯỚC các proposal create_task:
-         * Thứ tự proposals chuẩn hóa:
-           [1] create_workspace (nếu phòng chưa có)
-           [2] create_period (nếu chu kỳ chưa có)
-           [3] create_division (nếu phân chia chưa có)
-           [4] create_board_mode: Tạo Chế độ bảng (name: Tên chế độ bảng như "Kanban Lập trình", clusters: [{ name: "Cần làm", color: "#6366F1" }, { name: "Đang làm", color: "#F59E0B" }, { name: "Kiểm thử", color: "#8B5CF6" }, { name: "Hoàn thành", color: "#10B981" }])
-           [5+] create_task: Sau khi có chế độ bảng mới tạo các task với cluster_name khớp với các cột vừa thiết lập của chế độ bảng!
+- "Chế độ bảng" (Board Mode) là nơi hiển thị các cụm cột Kanban của một Phân chia. Nếu một Phân chia chưa có Chế độ bảng (hoặc người dùng yêu cầu tạo chế độ bảng kèm các nhiệm vụ):
+  * Proposal [1]: 'create_board_mode' tạo Chế độ bảng với tên người dùng chỉ định (hoặc gợi ý phù hợp như "Kế hoạch 7 ngày", "Kanban Công việc") kèm danh sách cột (clusters).
+  * Proposal [2+]: Các 'create_task' tiếp theo BẮT BUỘC PHẢI LIÊN KẾT ĐÚNG CHẾ ĐỘ BẢNG NÀY:
+    - Trong details của từng task, "board_mode_name" BẮT BUỘC PHẢI LÀ tên Chế độ bảng vừa tạo ở Proposal [1] (ví dụ: "Kế hoạch 7 ngày")! TUYỆT ĐỐI KHÔNG ĐƯỢC để là "Quản lý" hay chế độ cũ khác!
+    - "cluster_name": Điền chính xác tên một trong các cột vừa tạo của Chế độ bảng đó (ví dụ: "Cần làm", "Đang làm", "Hoàn thành").
+    - "division_id" & "division_name": Phân chia đích tương ứng (ví dụ: "Cá nhân").
+  * NGUYÊN TẮC VĂN PHONG PHẢN HỒI (REPLY) - CỰC KỲ QUAN TRỌNG:
+    - Trả lời NGẮN GỌN, TỰ NHIÊN, THÂN THIỆN (chỉ 1 - 2 câu).
+    - TUYỆT ĐỐI KHÔNG viết bài văn giảng giải, KHÔNG chia "quy trình 5 bước", KHÔNG phân tích bối cảnh 1 2 3, KHÔNG vẽ bảng liệt kê lại các việc (vì tất cả đã có sẵn trong thẻ đề xuất bên dưới để người dùng duyệt).
+    - KẾT THÚC BẰNG CÂU XÁC NHẬN CHUẨN: "Xin hãy xác nhận hành động: [mô tả ngắn hành động, ví dụ: tạo Chế độ bảng 'Kế hoạch 7 ngày' và 3 nhiệm vụ mẫu cho phân chia 'Cá nhân']." (Người dùng sẽ xác nhận bằng cách nói hoặc bấm OK / Không).
 
 === DỮ LIỆU NGỮ CẢNH HỆ THỐNG HIỆN TẠI ===
 Thời gian hệ thống hiện tại: ${new Date().toLocaleString('vi-VN')} (ISO: ${new Date().toISOString()})
@@ -251,7 +308,7 @@ ${JSON.stringify(contextData || {}, null, 2)}
 === ĐỊNH DẠNG ĐẦU RA BẮT BUỘC (JSON ONLY) ===
 Bạn PHẢI trả về duy nhất một JSON object hợp lệ:
 {
-  "reply": "Câu trả lời theo đúng văn phong Persona. Nếu là Nhánh 1: trò chuyện súc tích, duyên dáng, liệt kê kết quả tìm kiếm đầy đủ các phương án khả quan. Nếu là Nhánh 2: thông báo rõ đã chuẩn bị đề xuất thao tác và mời người dùng duyệt.",
+  "reply": "Câu trả lời theo đúng văn phong Persona: Ngắn gọn, tự nhiên, duyên dáng (1-2 câu). Nếu có proposals thay đổi dữ liệu, nêu ngắn gọn và KẾT THÚC BẰNG: 'Xin hãy xác nhận hành động: [mô tả ngắn].' Tuyệt đối không giảng giải dài dòng, không lập bảng kế hoạch!",
   "proposals": [
     {
       "id": "proposal-1",
@@ -334,15 +391,23 @@ Nếu người dùng chỉ trò chuyện hỏi han hoặc tìm kiếm tra cứu,
 
       const initialModel = normalizeGeminiModel(model);
 
-      // 1. If non-Gemini provider with User API Key (OpenAI, DeepSeek, OpenRouter, Claude, Custom API)
-      if (provider && provider !== 'gemini' && userApiKey) {
+      // 1. If non-Gemini provider (OpenAI, DeepSeek, OpenRouter, Claude, Custom API)
+      if (provider && provider !== 'gemini') {
+        const effectiveUserKey = userKey || (typeof userApiKey === 'string' ? userApiKey.trim() : '');
+        if (!effectiveUserKey) {
+          return res.status(400).json({
+            error: `Chưa cấu hình API Key cho ${provider.toUpperCase()}. Vui lòng nhập khóa API trong mục Cài đặt Mascot để sử dụng.`,
+            apiKeyInvalid: true,
+          });
+        }
+
         try {
           if (provider === 'claude') {
             const claudeResp = await fetch('https://api.anthropic.com/v1/messages', {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
-                'x-api-key': userApiKey,
+                'x-api-key': effectiveUserKey,
                 'anthropic-version': '2023-06-01',
               },
               body: JSON.stringify({
@@ -362,131 +427,173 @@ Nếu người dùng chỉ trò chuyện hỏi han hoặc tìm kiếm tra cứu,
               }),
             });
 
-            if (claudeResp.ok) {
-              const claudeData = (await claudeResp.json()) as any;
-              const content = claudeData.content?.[0]?.text || '{}';
-              let parsed: { reply?: string; proposals?: any[] } = {};
-              try {
-                parsed = JSON.parse(content);
-              } catch {
-                const cleaned = content.replace(/```json\n?|\n?```/g, '').trim();
-                try {
-                  parsed = JSON.parse(cleaned);
-                } catch {
-                  parsed = { reply: content, proposals: [] };
-                }
-              }
-              return res.json({
-                reply: parsed.reply || 'Đã tiếp nhận yêu cầu.',
-                proposals: Array.isArray(parsed.proposals) ? parsed.proposals : [],
-                modelUsed: model || 'claude-3-5-haiku-latest',
-                fellBack: false,
+            if (!claudeResp.ok) {
+              const errData = (await claudeResp.json().catch(() => ({}))) as any;
+              const errorMsg = errData?.error?.message || `HTTP ${claudeResp.status}`;
+              return res.status(claudeResp.status).json({
+                error: `Lỗi Anthropic Claude: ${errorMsg}`,
+                apiKeyInvalid: claudeResp.status === 401 || claudeResp.status === 403,
               });
             }
+
+            const claudeData = (await claudeResp.json()) as any;
+            const content = claudeData.content?.[0]?.text || '{}';
+            let parsed: { reply?: string; proposals?: any[] } = {};
+            try {
+              parsed = JSON.parse(content);
+            } catch {
+              const cleaned = content.replace(/```json\n?|\n?```/g, '').trim();
+              try {
+                parsed = JSON.parse(cleaned);
+              } catch {
+                parsed = { reply: content, proposals: [] };
+              }
+            }
+            return res.json({
+              reply: parsed.reply || 'Đã tiếp nhận yêu cầu.',
+              proposals: Array.isArray(parsed.proposals) ? parsed.proposals : [],
+              modelUsed: model || 'claude-3-5-haiku-latest',
+              fellBack: false,
+            });
           } else {
             let endpoint = customBaseUrl?.trim();
             if (!endpoint) {
               if (provider === 'openai') endpoint = 'https://api.openai.com/v1';
               else if (provider === 'deepseek') endpoint = 'https://api.deepseek.com';
               else if (provider === 'openrouter') endpoint = 'https://openrouter.ai/api/v1';
+              else endpoint = 'https://api.openai.com/v1';
             }
 
-            if (endpoint) {
-              const openAiMessages = [
-                { role: 'system', content: systemInstruction },
-                ...(Array.isArray(chatHistory)
-                  ? chatHistory.slice(-6).map((m: any) => ({
-                      role: m.role === 'assistant' ? 'assistant' : 'user',
-                      content: m.content || '',
-                    }))
-                  : []),
-                { role: 'user', content: message },
-              ];
+            const openAiMessages = [
+              {
+                role: 'system',
+                content:
+                  systemInstruction +
+                  '\nLƯU Ý QUAN TRỌNG: Bạn BẮT BUỘC luôn trả về phản hồi dưới định dạng JSON hợp lệ theo cấu trúc: {"reply": "...", "proposals": [...]}.',
+              },
+              ...(Array.isArray(chatHistory)
+                ? chatHistory.slice(-6).map((m: any) => ({
+                    role: m.role === 'assistant' ? 'assistant' : 'user',
+                    content: m.content || '',
+                  }))
+                : []),
+              { role: 'user', content: message },
+            ];
 
-              const chosenProviderModel =
-                model && model !== 'custom'
-                  ? model
-                  : provider === 'deepseek'
-                  ? 'deepseek-chat'
-                  : provider === 'openai'
-                  ? 'gpt-4o-mini'
-                  : 'meta-llama/llama-3.3-70b-instruct';
+            const chosenProviderModel =
+              model && model !== 'custom'
+                ? model
+                : provider === 'deepseek'
+                ? 'deepseek-chat'
+                : provider === 'openai'
+                ? 'gpt-4o-mini'
+                : 'meta-llama/llama-3.3-70b-instruct';
 
-              const resp = await fetch(`${endpoint.replace(/\/$/, '')}/chat/completions`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  Authorization: `Bearer ${userApiKey}`,
-                },
-                body: JSON.stringify({
-                  model: chosenProviderModel,
-                  messages: openAiMessages,
-                  temperature: 0.7,
-                  response_format: { type: 'json_object' },
-                }),
+            const resp = await fetch(`${endpoint.replace(/\/$/, '')}/chat/completions`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${effectiveUserKey}`,
+                ...(provider === 'openrouter'
+                  ? { 'HTTP-Referer': 'https://ai.studio', 'X-Title': 'Task Management Mascot' }
+                  : {}),
+              },
+              body: JSON.stringify({
+                model: chosenProviderModel,
+                messages: openAiMessages,
+                temperature: 0.7,
+                response_format: { type: 'json_object' },
+              }),
+            });
+
+            if (!resp.ok) {
+              const errData = (await resp.json().catch(() => ({}))) as any;
+              const errorMsg =
+                errData?.error?.message || errData?.message || `HTTP ${resp.status} ${resp.statusText}`;
+              return res.status(resp.status).json({
+                error: `Lỗi từ ${provider.toUpperCase()}: ${errorMsg}`,
+                apiKeyInvalid: resp.status === 401 || resp.status === 403,
               });
+            }
 
-              if (resp.ok) {
-                const respData = (await resp.json()) as any;
-                const content = respData.choices?.[0]?.message?.content || '{}';
-                let parsed: { reply?: string; proposals?: any[] } = {};
-                try {
-                  parsed = JSON.parse(content);
-                } catch {
-                  const cleaned = content.replace(/```json\n?|\n?```/g, '').trim();
-                  try {
-                    parsed = JSON.parse(cleaned);
-                  } catch {
-                    parsed = { reply: content, proposals: [] };
-                  }
-                }
-                return res.json({
-                  reply: parsed.reply || 'Đã tiếp nhận yêu cầu.',
-                  proposals: Array.isArray(parsed.proposals) ? parsed.proposals : [],
-                  modelUsed: chosenProviderModel,
-                  fellBack: false,
-                });
+            const respData = (await resp.json()) as any;
+            const content = respData.choices?.[0]?.message?.content || '{}';
+            let parsed: { reply?: string; proposals?: any[] } = {};
+            try {
+              parsed = JSON.parse(content);
+            } catch {
+              const cleaned = content.replace(/```json\n?|\n?```/g, '').trim();
+              try {
+                parsed = JSON.parse(cleaned);
+              } catch {
+                parsed = { reply: content, proposals: [] };
               }
             }
+            return res.json({
+              reply: parsed.reply || 'Đã tiếp nhận yêu cầu.',
+              proposals: Array.isArray(parsed.proposals) ? parsed.proposals : [],
+              modelUsed: chosenProviderModel,
+              fellBack: false,
+            });
           }
-        } catch (providerErr) {
-          console.warn('[AI Multi-Provider] Custom provider request failed, falling back to Gemini chain:', providerErr);
+        } catch (providerErr: unknown) {
+          const errMsg = providerErr instanceof Error ? providerErr.message : String(providerErr);
+          return res.status(500).json({
+            error: `Lỗi kết nối tới ${provider.toUpperCase()}: ${errMsg}`,
+          });
         }
       }
 
       // 2. Google Gemini provider with Multi-Model Fallback & Circuit-Breaker
-      // Candidate models ordered from fastest/default to ultra-high capacity fallbacks
-      const candidateList = [
-        initialModel,
-        'gemini-3.8-flash',
-        'gemini-3.1-flash-lite',
-        'gemini-flash-latest',
-        'gemini-3.5-flash',
-        'gemini-3.1-pro-preview',
-      ];
-      const uniqueCandidates = Array.from(new Set(candidateList));
-
-      // Sort candidates using Circuit Breaker: healthy candidates first, congested ones last
-      const now = Date.now();
-      const healthyCandidates: string[] = [];
-      const coolingCandidates: string[] = [];
-      for (const m of uniqueCandidates) {
-        const cooldown = congestedModels.get(m) || 0;
-        if (cooldown > now) {
-          coolingCandidates.push(m);
-        } else {
-          healthyCandidates.push(m);
-        }
+      if (!activeKey) {
+        return res.status(400).json({
+          error:
+            'Chưa cấu hình Gemini API Key. Vui lòng nhập API Key của bạn (bắt đầu bằng AIzaSy...) trong mục Cài đặt Mascot để sử dụng.',
+          apiKeyInvalid: true,
+        });
       }
-      const fallbackChain: string[] = [...healthyCandidates, ...coolingCandidates];
+
+      let ai = new GoogleGenAI({
+        apiKey: activeKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+
+      // Build strictly scoped candidate list based on user's selected model.
+      // NEVER silently fall back to Pro models (e.g. gemini-3.1-pro-preview) when the user selected Flash,
+      // because Pro models have limit: 0 on free-tier keys!
+      let fallbackChain: string[] = [];
+      if (initialModel === 'gemini-3.1-flash-lite') {
+        // User explicitly picked 3.1 Flash-Lite: ONLY try Flash-Lite, and at most Flash-Latest if 503 occurs
+        fallbackChain = ['gemini-3.1-flash-lite', 'gemini-flash-latest'];
+      } else if (initialModel === 'gemini-flash-latest') {
+        fallbackChain = ['gemini-flash-latest', 'gemini-3.1-flash-lite'];
+      } else if (initialModel === 'gemini-3.8-flash') {
+        fallbackChain = ['gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+      } else if (initialModel === 'gemini-3.5-flash') {
+        fallbackChain = ['gemini-3.5-flash', 'gemini-3.1-flash-lite'];
+      } else if (initialModel === 'gemini-3.1-pro-preview' || initialModel.includes('pro')) {
+        // User explicitly chose Pro: only run Pro
+        fallbackChain = ['gemini-3.1-pro-preview'];
+      } else {
+        fallbackChain = [initialModel, 'gemini-3.1-flash-lite'];
+      }
+
+      // Ensure the user's selected model is ALWAYS the first candidate executed
+      fallbackChain = Array.from(new Set([initialModel, ...fallbackChain]));
 
       let responseText = '';
       let successfulModel = initialModel;
       let lastModelError: Error | null = null;
+      let lastAttemptedModel = initialModel;
       let fellBack = false;
 
       for (let i = 0; i < fallbackChain.length; i++) {
         const currentModel = fallbackChain[i];
+        lastAttemptedModel = currentModel;
         try {
           const response = await ai.models.generateContent({
             model: currentModel,
@@ -510,7 +617,7 @@ Nếu người dùng chỉ trò chuyện hỏi han hoặc tìm kiếm tra cứu,
           lastModelError = callErr instanceof Error ? callErr : new Error(String(callErr));
           const errMsg = lastModelError.message || String(callErr);
           console.warn(
-            `[AI Chat] Model "${currentModel}" failed (${errMsg}). Attempting rollback to next candidate...`
+            `[AI Chat] Model "${currentModel}" failed (${errMsg}).`
           );
 
           // Check if error is due to invalid API key
@@ -523,49 +630,74 @@ Nếu người dùng chỉ trò chuyện hỏi han hoặc tìm kiếm tra cứu,
             errMsg.includes('ACCESS_TOKEN_TYPE_UNSUPPORTED') ||
             errMsg.includes('401');
 
-          if (isApiKeyInvalid) {
-            if (fallbackKey && !usedSystemFallbackKey) {
-              console.warn(
-                `[AI Key Fallback] Custom API key is invalid (${errMsg}). Automatically falling back to platform GEMINI_API_KEY.`
-              );
-              activeKey = fallbackKey;
-              usedSystemFallbackKey = true;
-              ai = new GoogleGenAI({
-                apiKey: activeKey,
-                httpOptions: {
-                  headers: {
-                    'User-Agent': 'aistudio-build',
-                  },
+          // Check if error is due to Rate Limit / Quota Exceeded (429)
+          const isQuotaExceeded =
+            errMsg.includes('429') ||
+            errMsg.includes('RESOURCE_EXHAUSTED') ||
+            errMsg.includes('Quota exceeded') ||
+            errMsg.includes('free_tier_requests') ||
+            errMsg.includes('rate-limit');
+
+          // If custom key failed due to invalid key or quota, attempt fallback to platform key for the SAME model
+          if (
+            (isApiKeyInvalid || isQuotaExceeded) &&
+            fallbackKey &&
+            !usedSystemFallbackKey &&
+            activeKey !== fallbackKey
+          ) {
+            console.warn(
+              `[AI Key Fallback] Custom API key encountered ${isApiKeyInvalid ? 'invalid key' : 'quota limit'} (${errMsg}). Falling back to platform GEMINI_API_KEY.`
+            );
+            activeKey = fallbackKey;
+            usedSystemFallbackKey = true;
+            ai = new GoogleGenAI({
+              apiKey: activeKey,
+              httpOptions: {
+                headers: {
+                  'User-Agent': 'aistudio-build',
                 },
-              });
-              // Reset index to retry with valid platform key
-              i--;
-              continue;
-            } else {
-              // If no fallback key or platform key itself is invalid, halt loop immediately to avoid redundant errors
-              console.error(`[AI Key Error] Active API key is invalid (${errMsg}). Halting candidate chain.`);
-              return res.status(400).json({
-                error: userKey
-                  ? 'API Key cá nhân bạn nhập không hợp lệ hoặc đã hết hạn (bắt đầu bằng AIzaSy...). Vui lòng kiểm tra lại API Key trong mục Cài đặt Mascot.'
-                  : 'Khóa API chưa được cấu hình hoặc đã hết hạn. Vui lòng dán Gemini API Key của bạn (bắt đầu bằng AIzaSy...) vào mục Cài đặt Mascot để sử dụng.',
-                apiKeyInvalid: true,
-              });
-            }
+              },
+            });
+            // Retry the same model with the platform key
+            i--;
+            continue;
           }
 
-          // If high demand spike (503 / UNAVAILABLE) or rate limit (429), mark in 45s cooldown
-          if (errMsg.includes('503') || errMsg.includes('UNAVAILABLE') || errMsg.includes('429')) {
+          if (isApiKeyInvalid) {
+            console.error(`[AI Key Error] Active API key is invalid (${errMsg}). Halting candidate chain.`);
+            return res.status(400).json({
+              error: userKey
+                ? 'API Key cá nhân bạn nhập không hợp lệ hoặc đã hết hạn (bắt đầu bằng AIzaSy...). Vui lòng kiểm tra lại API Key trong mục Cài đặt Mascot.'
+                : 'Khóa API chưa được cấu hình hoặc đã hết hạn. Vui lòng dán Gemini API Key của bạn (bắt đầu bằng AIzaSy...) vào mục Cài đặt Mascot để sử dụng.',
+              apiKeyInvalid: true,
+            });
+          }
+
+          // If Rate Limit / Quota is exceeded on the active key:
+          // Do NOT blindly try other models with the same exhausted key (which causes limit: 0 or spam).
+          // Terminate the chain immediately and return a clean friendly message!
+          if (isQuotaExceeded) {
+            console.warn(`[AI Quota Limit] Model "${currentModel}" quota reached. Terminating candidate chain.`);
+            const formatted = formatAiErrorResponse(lastModelError, currentModel);
+            return res.status(formatted.statusCode).json({
+              error: formatted.message,
+              rateLimited: true,
+            });
+          }
+
+          // If server congestion (503), mark in cooldown and allow next fallback candidate to try
+          if (errMsg.includes('503') || errMsg.includes('UNAVAILABLE')) {
             congestedModels.set(currentModel, Date.now() + 45000);
-            console.warn(`[AI Circuit Breaker] Model "${currentModel}" marked congested for 45s to eliminate retry lag.`);
+            console.warn(`[AI Circuit Breaker] Model "${currentModel}" 503 unavailable, trying next candidate...`);
           }
         }
       }
 
       if (!responseText) {
-        throw (
-          lastModelError ||
-          new Error('Tất cả các model trong chuỗi rollback đều không phản hồi.')
-        );
+        const formatted = formatAiErrorResponse(lastModelError, lastAttemptedModel);
+        return res.status(formatted.statusCode).json({
+          error: formatted.message,
+        });
       }
 
       let parsedData: { reply?: string; proposals?: unknown[] };
@@ -584,13 +716,13 @@ Nếu người dùng chỉ trò chuyện hỏi han hoặc tìm kiếm tra cứu,
         fellBack,
         usedSystemFallbackKey,
         systemFallbackNotice: usedSystemFallbackKey
-          ? 'Khóa API cá nhân bạn đã nhập không hợp lệ nên hệ thống đã tự động dùng API Key mặc định của hệ thống để hỗ trợ bạn.'
+          ? 'Khóa API cá nhân bạn đã nhập bị lỗi hoặc hết quota, hệ thống đã tạm thời dùng API Key mặc định của hệ thống để hỗ trợ bạn.'
           : undefined,
       });
     } catch (err: unknown) {
       console.error('Mascot chat error:', err);
-      const errorMsg = err instanceof Error ? err.message : 'Lỗi không xác định khi gọi AI';
-      return res.status(500).json({ error: errorMsg });
+      const formatted = formatAiErrorResponse(err, model || 'gemini-3.1-flash-lite');
+      return res.status(formatted.statusCode).json({ error: formatted.message });
     }
   });
 
@@ -770,6 +902,15 @@ Nếu người dùng chỉ trò chuyện hỏi han hoặc tìm kiếm tra cứu,
       }
 
       // Handle OpenAI / DeepSeek / OpenRouter / Custom (OpenAI compatible endpoints)
+      if (!userKey) {
+        return res.status(400).json({
+          ok: false,
+          provider,
+          code: 'API_KEY_MISSING',
+          message: `Vui lòng nhập API Key cho ${provider.toUpperCase()} để kiểm tra kết nối.`,
+        });
+      }
+
       let endpoint = customBaseUrl?.trim();
       if (!endpoint) {
         if (provider === 'openai') endpoint = 'https://api.openai.com/v1';
