@@ -14,6 +14,15 @@ export interface UserProfile {
   created_at: string;
   updated_at: string;
   last_login_at?: string;
+  current_session_token?: string;
+  last_login_device?: string;
+}
+
+export interface SessionDisplacedNotice {
+  isOpen: boolean;
+  userEmail?: string;
+  newDevice?: string;
+  loggedInAt?: string;
 }
 
 export type WorkspaceMemberRole = 'owner' | 'admin' | 'member';

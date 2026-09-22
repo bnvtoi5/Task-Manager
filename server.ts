@@ -15,6 +15,90 @@ async function startServer() {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
+  // Active user sessions store (single active session enforcement per account)
+  interface ActiveSessionRecord {
+    userId: string;
+    email: string;
+    sessionToken: string;
+    device: string;
+    ip: string;
+    loggedInAt: string;
+  }
+  const activeSessions = new Map<string, ActiveSessionRecord>();
+
+  // Register session when a user logs in from any device
+  app.post('/api/auth/register-session', (req, res) => {
+    try {
+      const { userId, email, sessionToken, device } = req.body || {};
+      if (!userId || !sessionToken) {
+        return res.status(400).json({ error: 'Missing userId or sessionToken' });
+      }
+
+      const clientIp =
+        (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+        req.socket.remoteAddress ||
+        '127.0.0.1';
+
+      activeSessions.set(userId, {
+        userId,
+        email: email || '',
+        sessionToken,
+        device: device || 'Thiết bị khác',
+        ip: clientIp,
+        loggedInAt: new Date().toISOString(),
+      });
+
+      return res.json({ success: true, message: 'Session registered' });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error';
+      return res.status(500).json({ error: msg });
+    }
+  });
+
+  // Heartbeat check: validates if client session is still the active one
+  app.get('/api/auth/check-session', (req, res) => {
+    const userId = req.query.userId as string;
+    const sessionToken = req.query.sessionToken as string;
+
+    if (!userId || !sessionToken) {
+      return res.status(400).json({ valid: false, reason: 'missing_params' });
+    }
+
+    const current = activeSessions.get(userId);
+    if (!current) {
+      // If server was restarted or memory cleared, permit until a new login takes place
+      return res.json({ valid: true });
+    }
+
+    if (current.sessionToken !== sessionToken) {
+      // Session has been taken over by another machine/browser!
+      return res.json({
+        valid: false,
+        reason: 'displaced',
+        newDevice: current.device,
+        loggedInAt: current.loggedInAt,
+      });
+    }
+
+    return res.json({ valid: true });
+  });
+
+  // Invalidate session on explicit logout
+  app.post('/api/auth/invalidate-session', (req, res) => {
+    try {
+      const { userId, sessionToken } = req.body || {};
+      if (userId) {
+        const current = activeSessions.get(userId);
+        if (current && (!sessionToken || current.sessionToken === sessionToken)) {
+          activeSessions.delete(userId);
+        }
+      }
+      return res.json({ success: true });
+    } catch {
+      return res.json({ success: true });
+    }
+  });
+
   // In-memory circuit breaker to prevent repeated 503 lag spikes during peak hours
   const congestedModels = new Map<string, number>();
 
@@ -721,7 +805,8 @@ Nếu người dùng chỉ trò chuyện hỏi han hoặc tìm kiếm tra cứu,
       });
     } catch (err: unknown) {
       console.error('Mascot chat error:', err);
-      const formatted = formatAiErrorResponse(err, model || 'gemini-3.1-flash-lite');
+      const reqModel = (req.body?.model as string) || 'gemini-3.1-flash-lite';
+      const formatted = formatAiErrorResponse(err, reqModel);
       return res.status(formatted.statusCode).json({ error: formatted.message });
     }
   });

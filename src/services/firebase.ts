@@ -203,8 +203,9 @@ function prepareFirestorePayload(db: DatabaseState): string {
 
 /**
  * Saves database state to Firestore with intelligent coalescing & throttling to protect Firebase 20k writes/day free quota.
+ * Passing `immediate = true` forces an instant write without debounce (crucial for login / logout / session takeovers).
  */
-export function saveToFirestore(db: DatabaseState): Promise<boolean> {
+export function saveToFirestore(db: DatabaseState, immediate: boolean = false): Promise<boolean> {
   if (!firestore) return Promise.resolve(false);
 
   const payloadJson = prepareFirestorePayload(db);
@@ -215,6 +216,35 @@ export function saveToFirestore(db: DatabaseState): Promise<boolean> {
   }
 
   pendingDbToWrite = db;
+
+  if (immediate) {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    lastSavePromise = null;
+    pendingDbToWrite = null;
+
+    return (async () => {
+      try {
+        const jsonToUpload = prepareFirestorePayload(db);
+        lastSavedStateJson = jsonToUpload;
+        lastWriteTimestamp = Date.now();
+
+        const docRef = doc(firestore, FIRESTORE_COLLECTION, FIRESTORE_DOC);
+        await setDoc(docRef, {
+          stateJson: jsonToUpload,
+          schema_version: 7,
+          updatedAt: new Date().toISOString(),
+          updatedBy: 'web_client',
+        });
+        return true;
+      } catch (err: any) {
+        console.warn('Lỗi đồng bộ dữ liệu tức thời lên Firestore:', err);
+        return false;
+      }
+    })();
+  }
 
   if (lastSavePromise && saveTimer) {
     // Already scheduled, pending state updated

@@ -26,11 +26,13 @@ import {
   BoardModeCluster,
   RestorePoint,
   TaskChecklistItem,
+  SessionDisplacedNotice,
 } from '../types';
 import { loadDatabase, saveDatabase, DatabaseState, resetToEmptyDatabase } from '../services/storage';
 import { playAlarmSound, sendBrowserNotification } from '../services/alarm';
 import { subscribeToFirestore, saveToFirestore } from '../services/firebase';
 import { getWeekdayClusterId, getPriorityClusterId } from '../utils/boardModeUtils';
+import { getClientDeviceInfo } from '../utils/device';
 
 export type AppRoute =
   | '/login'
@@ -50,6 +52,10 @@ interface AppContextType {
   cycleTheme: () => void;
   toggleTheme: () => void;
   navigateTo: (route: AppRoute) => void;
+
+  // Single active session displaced notification
+  sessionNotice: SessionDisplacedNotice;
+  dismissSessionNotice: () => void;
 
   // Custom Board Modes (Perspectives)
   activeBoardModeId: string;
@@ -234,6 +240,74 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const isIncomingRemoteUpdate = useRef(false);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Single active session notice state
+  const [sessionNotice, setSessionNotice] = useState<SessionDisplacedNotice>({
+    isOpen: false,
+  });
+  const dismissSessionNotice = () => {
+    setSessionNotice((prev) => ({ ...prev, isOpen: false }));
+  };
+
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
+    // Check if there was a saved session
+    const savedUserId = localStorage.getItem('wtm_session_user');
+    const savedToken = localStorage.getItem('wtm_session_token');
+    if (savedUserId) {
+      const found = db.users.find((u) => u.id === savedUserId && u.is_active);
+      if (found) {
+        // If user record already has a session token and local token exists and mismatches, displace
+        if (found.current_session_token && savedToken && found.current_session_token !== savedToken) {
+          localStorage.removeItem('wtm_session_user');
+          localStorage.removeItem('wtm_session_token');
+          localStorage.removeItem('wtm_session_device');
+          return null;
+        }
+        return found;
+      }
+    }
+    return null;
+  });
+
+  const currentUserRef = useRef<UserProfile | null>(currentUser);
+  currentUserRef.current = currentUser;
+
+  // Function to kick out this machine when another machine logs into the same account
+  const triggerDisplacedLogout = (reason?: string, newDevice?: string, loggedInAt?: string) => {
+    console.warn('[Session Security] Đã ngắt kết nối phiên làm việc do đăng nhập trên thiết bị khác:', { reason, newDevice, loggedInAt });
+    const userEmail = currentUserRef.current?.email || '';
+
+    // Clear any pending debounced auto-save write to prevent overwriting remote database
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+    }
+
+    setSessionNotice({
+      isOpen: true,
+      userEmail,
+      newDevice: newDevice || 'Thiết bị khác',
+      loggedInAt: loggedInAt || new Date().toISOString(),
+    });
+
+    logAudit(
+      userEmail || 'system',
+      'Bị ngắt phiên đăng nhập',
+      '127.0.0.1',
+      'blocked',
+      `Tài khoản vừa được đăng nhập trên một thiết bị khác (${newDevice || 'Thiết bị mới'}). Phiên làm việc trên máy này đã tự động kết thúc để tránh xung đột dữ liệu.`
+    );
+
+    localStorage.removeItem('wtm_session_user');
+    localStorage.removeItem('wtm_session_token');
+    localStorage.removeItem('wtm_session_device');
+    setCurrentUser(null);
+    setActiveWorkspaceId(null);
+    setActivePeriodId(null);
+    setActiveDivisionId(null);
+    setActiveClusterId(null);
+    setCurrentRoute('/login');
+  };
+
   // Real-time synchronization with Firebase Firestore
   useEffect(() => {
     const unsubscribe = subscribeToFirestore(
@@ -242,6 +316,25 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setDb(remoteDb);
         // Also update local cache
         saveDatabase(remoteDb);
+
+        // Security check: Check if current user on this machine was kicked out by another machine
+        const localUserId = localStorage.getItem('wtm_session_user');
+        const localToken = localStorage.getItem('wtm_session_token');
+        if (localUserId && localToken && remoteDb.users) {
+          const remoteUser = remoteDb.users.find((u) => u.id === localUserId);
+          if (
+            remoteUser &&
+            remoteUser.current_session_token &&
+            remoteUser.current_session_token !== localToken
+          ) {
+            triggerDisplacedLogout(
+              'remote_takeover',
+              remoteUser.last_login_device,
+              remoteUser.last_login_at
+            );
+          }
+        }
+
         setTimeout(() => {
           isIncomingRemoteUpdate.current = false;
         }, 150);
@@ -258,15 +351,82 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     return () => unsubscribe();
   }, []);
-  const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
-    // Check if there was a saved session
-    const savedUserId = localStorage.getItem('wtm_session_user');
-    if (savedUserId) {
-      const found = db.users.find((u) => u.id === savedUserId && u.is_active);
-      return found || null;
+
+  // Heartbeat check: actively verify with server every 3.5s & on window focus to kick out instantly
+  useEffect(() => {
+    if (!currentUser) return;
+    const localToken = localStorage.getItem('wtm_session_token');
+    if (!localToken) return;
+
+    let isMounted = true;
+
+    const checkSessionWithServer = async () => {
+      try {
+        const res = await fetch(
+          `/api/auth/check-session?userId=${encodeURIComponent(currentUser.id)}&sessionToken=${encodeURIComponent(localToken)}`
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        if (isMounted && data && data.valid === false && data.reason === 'displaced') {
+          triggerDisplacedLogout('server_check', data.newDevice, data.loggedInAt);
+        }
+      } catch {
+        // Network lag; safely ignore
+      }
+    };
+
+    const interval = setInterval(checkSessionWithServer, 3500);
+
+    const handleFocus = () => {
+      checkSessionWithServer();
+    };
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleFocus);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleFocus);
+    };
+  }, [currentUser]);
+
+  // Sync session across browser tabs
+  useEffect(() => {
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'wtm_session_user' || e.key === 'wtm_session_token') {
+        const currentLocalUserId = localStorage.getItem('wtm_session_user');
+        const currentLocalToken = localStorage.getItem('wtm_session_token');
+        if (!currentLocalUserId || !currentLocalToken) {
+          if (currentUserRef.current) {
+            setCurrentUser(null);
+            setCurrentRoute('/login');
+          }
+        }
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, []);
+
+  // Register existing session with server on initial mount
+  useEffect(() => {
+    if (currentUser) {
+      const localToken = localStorage.getItem('wtm_session_token');
+      if (localToken) {
+        fetch('/api/auth/register-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: currentUser.id,
+            email: currentUser.email,
+            sessionToken: localToken,
+            device: localStorage.getItem('wtm_session_device') || getClientDeviceInfo(),
+          }),
+        }).catch(() => {});
+      }
     }
-    return null;
-  });
+  }, []);
 
   const [currentRoute, setCurrentRoute] = useState<AppRoute>(() => {
     return currentUser ? (currentUser.role === 'admin' ? '/admin' : '/app') : '/login';
@@ -592,19 +752,60 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return { success: false, message: 'Mật khẩu không chính xác.' };
     }
 
-    const updatedUser = { ...user, last_login_at: new Date().toISOString() };
+    // Dismiss any old displaced notice if user logs in
+    setSessionNotice({ isOpen: false });
+
+    // Generate unique session token for single-session enforcement
+    const sessionToken =
+      'sess_' +
+      Date.now() +
+      '_' +
+      Math.random().toString(36).substring(2, 10) +
+      '_' +
+      Math.random().toString(36).substring(2, 8);
+    const deviceInfo = getClientDeviceInfo();
+
+    const updatedUser: UserProfile = {
+      ...user,
+      last_login_at: new Date().toISOString(),
+      current_session_token: sessionToken,
+      last_login_device: deviceInfo,
+    };
+
+    localStorage.setItem('wtm_session_user', updatedUser.id);
+    localStorage.setItem('wtm_session_token', sessionToken);
+    localStorage.setItem('wtm_session_device', deviceInfo);
+
+    // Register active session on server immediately
+    fetch('/api/auth/register-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: updatedUser.id,
+        email: updatedUser.email,
+        sessionToken,
+        device: deviceInfo,
+      }),
+    }).catch(() => {});
+
     setDb((prev) => {
       const updated = {
         ...prev,
         users: prev.users.map((u) => (u.id === user.id ? updatedUser : u)),
       };
       saveDatabase(updated);
-      saveToFirestore(updated).catch(() => {});
+      saveToFirestore(updated, true).catch(() => {}); // Write immediately to Firestore so other machines are kicked out in <500ms
       return updated;
     });
     setCurrentUser(updatedUser);
 
-    logAudit(email, 'Đăng nhập thành công', '127.0.0.1', 'success', `Đăng nhập với vai trò ${user.role}.`);
+    logAudit(
+      email,
+      'Đăng nhập thành công',
+      '127.0.0.1',
+      'success',
+      `Đăng nhập với vai trò ${user.role} trên ${deviceInfo}. Phiên cũ trên thiết bị khác sẽ tự động ngắt kết nối.`
+    );
 
     if (user.role === 'admin') {
       setCurrentRoute('/admin');
@@ -624,6 +825,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return { success: false, message: 'Email này đã được sử dụng. Vui lòng đăng nhập.' };
     }
 
+    setSessionNotice({ isOpen: false });
+
+    const sessionToken =
+      'sess_' +
+      Date.now() +
+      '_' +
+      Math.random().toString(36).substring(2, 10) +
+      '_' +
+      Math.random().toString(36).substring(2, 8);
+    const deviceInfo = getClientDeviceInfo();
+
     const newUser: UserProfile = {
       id: `usr-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       email: cleanEmail,
@@ -635,7 +847,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       last_login_at: new Date().toISOString(),
+      current_session_token: sessionToken,
+      last_login_device: deviceInfo,
     };
+
+    localStorage.setItem('wtm_session_user', newUser.id);
+    localStorage.setItem('wtm_session_token', sessionToken);
+    localStorage.setItem('wtm_session_device', deviceInfo);
+
+    fetch('/api/auth/register-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: newUser.id,
+        email: newUser.email,
+        sessionToken,
+        device: deviceInfo,
+      }),
+    }).catch(() => {});
 
     setDb((prev) => {
       const updated = {
@@ -643,20 +872,35 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         users: [...prev.users, newUser],
       };
       saveDatabase(updated);
-      saveToFirestore(updated).catch(() => {});
+      saveToFirestore(updated, true).catch(() => {});
       return updated;
     });
     setCurrentUser(newUser);
     setCurrentRoute('/app');
 
-    logAudit(newUser.email, 'Đăng ký tài khoản mới', '127.0.0.1', 'success', 'Tạo tài khoản user thường.');
+    logAudit(newUser.email, 'Đăng ký tài khoản mới', '127.0.0.1', 'success', `Tạo tài khoản user thường trên ${deviceInfo}.`);
     return { success: true, message: 'Đăng ký thành công! Chào mừng bạn.' };
   };
 
   const logout = () => {
+    const localToken = localStorage.getItem('wtm_session_token');
+    if (currentUser && localToken) {
+      fetch('/api/auth/invalidate-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          sessionToken: localToken,
+        }),
+      }).catch(() => {});
+    }
+
     if (currentUser) {
       logAudit(currentUser.email, 'Đăng xuất', '127.0.0.1', 'success', 'Người dùng đăng xuất phiên làm việc.');
     }
+    localStorage.removeItem('wtm_session_user');
+    localStorage.removeItem('wtm_session_token');
+    localStorage.removeItem('wtm_session_device');
     setCurrentUser(null);
     setActiveWorkspaceId(null);
     setActivePeriodId(null);
@@ -3167,8 +3411,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const fresh = resetToEmptyDatabase();
     setDb(fresh);
     saveDatabase(fresh);
-    saveToFirestore(fresh).catch(() => {});
+    saveToFirestore(fresh, true).catch(() => {});
     localStorage.removeItem('wtm_session_user');
+    localStorage.removeItem('wtm_session_token');
+    localStorage.removeItem('wtm_session_device');
     setCurrentUser(null);
     setActiveWorkspaceId(null);
     setActivePeriodId(null);
@@ -3188,6 +3434,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         cycleTheme,
         toggleTheme,
         navigateTo,
+
+        sessionNotice,
+        dismissSessionNotice,
 
         firebaseStatus,
         firebaseError,
